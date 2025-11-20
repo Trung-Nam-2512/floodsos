@@ -283,7 +283,8 @@ function MapPage() {
     }, [])
 
     // Xử lý click thủy điện marker
-    const handleThuydienClick = useCallback((reservoir) => {
+    const handleThuydienClick = useCallback(async (reservoir) => {
+        // Set selected thuydien ngay để hiển thị popup
         setSelectedThuydien(reservoir)
         setSelectedPoint(null)
         setSelectedRescue(null)
@@ -296,6 +297,25 @@ function MapPage() {
                 latitude: reservoir.coordinates.lat,
                 zoom: Math.max(prev.zoom, 14)
             }))
+        }
+
+        // Gọi API để lấy dữ liệu mới nhất của hồ này
+        if (reservoir.slug) {
+            try {
+                const response = await axios.get(`${API_URL}/api/thuydien/${reservoir.slug}/latest`)
+                if (response.data && response.data.success && response.data.data) {
+                    // Cập nhật dữ liệu mới nhất vào selectedThuydien
+                    setSelectedThuydien({
+                        ...reservoir,
+                        ...response.data.data,
+                        hasData: true,
+                        data: response.data.data.data
+                    })
+                }
+            } catch (error) {
+                console.error('Lỗi lấy dữ liệu thủy điện chi tiết:', error)
+                // Giữ nguyên dữ liệu cũ nếu API lỗi
+            }
         }
     }, [])
 

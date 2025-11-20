@@ -97,14 +97,16 @@ const reversed = {
 };
 
 function formatDateTime() {
+    // Dùng timezone Việt Nam (GMT+7)
     const now = new Date();
+    const vietnamTime = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Ho_Chi_Minh" }));
 
-    const day = String(now.getDate()).padStart(2, "0");
-    const month = String(now.getMonth() + 1).padStart(2, "0"); // months are 0-based
-    const year = now.getFullYear();
+    const day = String(vietnamTime.getDate()).padStart(2, "0");
+    const month = String(vietnamTime.getMonth() + 1).padStart(2, "0"); // months are 0-based
+    const year = vietnamTime.getFullYear();
 
-    const hours = String(now.getHours()).padStart(2, "0");
-    const minutes = String(now.getMinutes()).padStart(2, "0");
+    const hours = String(vietnamTime.getHours()).padStart(2, "0");
+    const minutes = String(vietnamTime.getMinutes()).padStart(2, "0");
 
     return `${day}/${month}/${year} ${hours}:${minutes}`;
 }
@@ -161,7 +163,7 @@ function appendIfDifferent(filePath, newRow) {
     // Read existing file
     const content = fs.readFileSync(filePath, "utf8").trim();
     const lines = content.split("\n").filter(line => line.trim());
-    
+
     if (lines.length < 2) {
         // File chỉ có header hoặc rỗng, append trực tiếp
         fs.appendFileSync(filePath, newRow + "\n");
@@ -171,45 +173,45 @@ function appendIfDifferent(filePath, newRow) {
 
     const header = lines[0];
     const dataRows = lines.slice(1);
-    
+
     // Parse Time từ newRow để so sánh
     const newRowTime = newRow.split(";")[0];
-    
+
     // Kiểm tra xem đã có dòng với cùng Time chưa (trùng lặp)
     const isDuplicate = dataRows.some(row => {
         const rowTime = row.split(";")[0];
         return rowTime === newRowTime;
     });
-    
+
     if (isDuplicate) {
         console.log(filePath, " Row với Time", newRowTime, "đã tồn tại. Skipped.");
         return;
     }
-    
+
     // Kiểm tra xem có khác dòng cuối không (tránh append cùng dữ liệu liên tiếp)
     const lastRow = dataRows[dataRows.length - 1];
     if (lastRow === newRow) {
         console.log(filePath, " Row is the same as last one. Skipped appending.");
         return;
     }
-    
+
     // Thêm dòng mới vào mảng và sắp xếp lại theo Time
     const allRows = [...dataRows, newRow];
-    
+
     // Sắp xếp theo Time (từ cũ đến mới)
     allRows.sort((a, b) => {
         const timeA = a.split(";")[0];
         const timeB = b.split(";")[0];
         const dateA = new Date(timeA);
         const dateB = new Date(timeB);
-        
+
         if (isNaN(dateA.getTime()) || isNaN(dateB.getTime())) {
             return timeA.localeCompare(timeB);
         }
-        
+
         return dateA - dateB;
     });
-    
+
     // Ghi lại toàn bộ file với dữ liệu đã sắp xếp
     const newContent = header + "\n" + allRows.join("\n") + "\n";
     fs.writeFileSync(filePath, newContent, "utf8");
@@ -218,7 +220,7 @@ function appendIfDifferent(filePath, newRow) {
 
 function fetchData1() {
     const currentURL = `${url}?td=${encodeURIComponent(formatDateTime())}`;
-    
+
     // Tạo request với timeout
     const request = https.get(currentURL, {
         timeout: 30000, // 30 giây timeout
@@ -233,96 +235,98 @@ function fetchData1() {
         });
 
         res.on("end", () => {
-                // console.log(data); // HTML content
-                const $ = cheerio.load(data);
+            // console.log(data); // HTML content
+            const $ = cheerio.load(data);
 
-                const table = $("table.tblgridtd").first();
-                const rows = table.find("tr");
-                let result = [];
+            const table = $("table.tblgridtd").first();
+            const rows = table.find("tr");
+            let result = [];
 
-                rows.each((i, row) => {
-                    const cells = $(row).find("td, th"); // both header and normal cells
+            rows.each((i, row) => {
+                const cells = $(row).find("td, th"); // both header and normal cells
 
-                    const rowData = [];
-                    cells.each((j, cell) => {
-                        const text = $(cell).text().trim();
-                        rowData.push(text);
-                    });
-                    if (rowData.length > 0) {
-                        result.push(rowData);
-                    }
+                const rowData = [];
+                cells.each((j, cell) => {
+                    const text = $(cell).text().trim();
+                    rowData.push(text);
                 });
-                // console.log("Dữ liệu sau khi bocsh tách")
-                // console.log(result)
-
-                // Convert to array of objects if headers exist
-                let json = result;
-                // console.log("json", json)
-                if (result.length > 1) {
-                    const headers = result[0];
-                    json = result.slice(1).map((row) => {
-                        const obj = {};
-                        row.forEach((val, i) => {
-                            obj[headers[i] || `col${i + 1}`] = val;
-                        });
-                        return obj;
-                    });
+                if (rowData.length > 0) {
+                    result.push(rowData);
                 }
-                const cnow = new Date();
-                let cyear = cnow.getFullYear();
-                let cmonth = String(cnow.getMonth() + 1).padStart(2, "0");
-                let cday = String(cnow.getDate()).padStart(2, "0");
-                for (let i = 2; i < json.length; i++) {
-                    if (json[i].hasOwnProperty("Htl")) {
-                        const rawTenHo = json[i]["Tên hồ"];
-                        const thoiDiemRaw = json[i]["Thời điểm"] || "";
-                        const outputTimeDongBo = convertToFullDate(thoiDiemRaw);
-
-                        const tenHoClean = (rawTenHo || "").split("Đồng bộ lúc:")[0].trim();
-                        const mappedSlug = tDic[tenHoClean];
-                        const safeFileName = mappedSlug || sanitizeFileName(tenHoClean);
-
-                        // Chỉ lấy dữ liệu cho các hồ trong danh sách TARGET_RESERVOIRS
-                        if (!TARGET_RESERVOIRS.includes(safeFileName)) {
-                            continue;
-                        }
-
-                        // console.log("debug 1", tenHoClean, mappedSlug, outputTimeDongBo);
-                        //console.log(json[i]);
-
-                        // Keys to exclude
-                        const excludeKeys = ["Tên hồ", "Thời điểm"];
-
-                        // Filter keys
-                        const keys = Object.keys(json[i]).filter((key) => !excludeKeys.includes(key));
-                        // console.log(keys)
-                        // Create CSV string
-                        const header = "Time;" + keys.join(";"); // CSV header
-                        const row = outputTimeDongBo + ";" + keys.map((key) => json[i][key]).join(";"); // CSV data row
-                        //Kiểm tra file có tồn tại không
-
-                        const filePath = path.join(__dirname, `data/${cyear}/${cmonth}/${cday}/${safeFileName}.csv`);
-                        if (!fs.existsSync(filePath)) {
-                            // Create directory if it doesn't exist
-                            fs.mkdirSync(path.dirname(filePath), { recursive: true });
-                            // Write header to new file
-                            fs.writeFileSync(filePath, header + "\n" + row + "\n", "utf8");
-                        } else {
-                            // Append to existing file
-                            appendIfDifferent(filePath, row);
-                        }
-
-                        // console.log(filePath, "updated");
-                    }
-                }
-
-                //console.log(JSON.stringify(json, null, 2));
-            }).on("error", (err) => {
-                // Xử lý lỗi khi parse HTML hoặc response stream
-                logger.warn(`⚠️  Lỗi khi xử lý response thủy điện: ${err.message}`);
             });
+            // console.log("Dữ liệu sau khi bocsh tách")
+            // console.log(result)
+
+            // Convert to array of objects if headers exist
+            let json = result;
+            // console.log("json", json)
+            if (result.length > 1) {
+                const headers = result[0];
+                json = result.slice(1).map((row) => {
+                    const obj = {};
+                    row.forEach((val, i) => {
+                        obj[headers[i] || `col${i + 1}`] = val;
+                    });
+                    return obj;
+                });
+            }
+            // Dùng timezone Việt Nam (GMT+7) để tạo file path
+            const now = new Date();
+            const vietnamTime = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Ho_Chi_Minh" }));
+            let cyear = vietnamTime.getFullYear();
+            let cmonth = String(vietnamTime.getMonth() + 1).padStart(2, "0");
+            let cday = String(vietnamTime.getDate()).padStart(2, "0");
+            for (let i = 2; i < json.length; i++) {
+                if (json[i].hasOwnProperty("Htl")) {
+                    const rawTenHo = json[i]["Tên hồ"];
+                    const thoiDiemRaw = json[i]["Thời điểm"] || "";
+                    const outputTimeDongBo = convertToFullDate(thoiDiemRaw);
+
+                    const tenHoClean = (rawTenHo || "").split("Đồng bộ lúc:")[0].trim();
+                    const mappedSlug = tDic[tenHoClean];
+                    const safeFileName = mappedSlug || sanitizeFileName(tenHoClean);
+
+                    // Chỉ lấy dữ liệu cho các hồ trong danh sách TARGET_RESERVOIRS
+                    if (!TARGET_RESERVOIRS.includes(safeFileName)) {
+                        continue;
+                    }
+
+                    // console.log("debug 1", tenHoClean, mappedSlug, outputTimeDongBo);
+                    //console.log(json[i]);
+
+                    // Keys to exclude
+                    const excludeKeys = ["Tên hồ", "Thời điểm"];
+
+                    // Filter keys
+                    const keys = Object.keys(json[i]).filter((key) => !excludeKeys.includes(key));
+                    // console.log(keys)
+                    // Create CSV string
+                    const header = "Time;" + keys.join(";"); // CSV header
+                    const row = outputTimeDongBo + ";" + keys.map((key) => json[i][key]).join(";"); // CSV data row
+                    //Kiểm tra file có tồn tại không
+
+                    const filePath = path.join(__dirname, `data/${cyear}/${cmonth}/${cday}/${safeFileName}.csv`);
+                    if (!fs.existsSync(filePath)) {
+                        // Create directory if it doesn't exist
+                        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+                        // Write header to new file
+                        fs.writeFileSync(filePath, header + "\n" + row + "\n", "utf8");
+                    } else {
+                        // Append to existing file
+                        appendIfDifferent(filePath, row);
+                    }
+
+                    // console.log(filePath, "updated");
+                }
+            }
+
+            //console.log(JSON.stringify(json, null, 2));
+        }).on("error", (err) => {
+            // Xử lý lỗi khi parse HTML hoặc response stream
+            logger.warn(`⚠️  Lỗi khi xử lý response thủy điện: ${err.message}`);
         });
-    
+    });
+
     // Xử lý lỗi network cho request
     request.on("error", (err) => {
         // Xử lý các lỗi network
@@ -336,7 +340,7 @@ function fetchData1() {
             logger.error(`❌ Thủy điện EVN: Lỗi khi fetch dữ liệu - ${err.message}`);
         }
     });
-    
+
     // Set timeout cho request
     request.setTimeout(30000, () => {
         request.destroy(); // Hủy request khi timeout

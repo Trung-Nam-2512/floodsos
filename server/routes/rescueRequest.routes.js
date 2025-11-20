@@ -25,6 +25,13 @@ router.post('/', rescueRequestController.createWithAI);
 router.get('/', rescueRequestController.getAll);
 
 /**
+ * @route   PUT /api/rescue-requests/:id
+ * @desc    Cập nhật toàn bộ thông tin của rescue request (Admin only)
+ * @access  Admin
+ */
+router.put('/:id', rescueRequestController.update);
+
+/**
  * @route   PUT /api/rescue-requests/:id/status
  * @desc    Cập nhật status của rescue request
  * @access  Admin
@@ -37,6 +44,13 @@ router.put('/:id/status', rescueRequestController.updateStatus);
  * @access  Public (để user có thể cập nhật thủ công)
  */
 router.put('/:id/coords', rescueRequestController.updateCoords);
+
+/**
+ * @route   DELETE /api/rescue-requests/:id
+ * @desc    Xóa rescue request (Admin only - để lọc spam)
+ * @access  Admin
+ */
+router.delete('/:id', rescueRequestController.delete);
 
 /**
  * @route   GET /api/rescue-requests/admin/stats

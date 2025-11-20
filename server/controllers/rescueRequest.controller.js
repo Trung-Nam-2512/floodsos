@@ -427,6 +427,196 @@ class RescueRequestController {
     }
 
     /**
+     * Cập nhật toàn bộ thông tin của rescue request (Admin only)
+     * PUT /api/rescue-requests/:id
+     */
+    async update(req, res) {
+        try {
+            const { id } = req.params;
+            const {
+                location,
+                coords,
+                urgency,
+                people,
+                needs,
+                description,
+                contact,
+                contactFull,
+                status,
+                assignedTo,
+                notes,
+                facebookUrl,
+                googleMapsUrl
+            } = req.body;
+
+            // Validate ID
+            if (!id) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'ID không hợp lệ'
+                });
+            }
+
+            // Tìm rescue request
+            const request = await RescueRequest.findById(id);
+            if (!request) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Không tìm thấy rescue request'
+                });
+            }
+
+            // Build update data (chỉ update các field được gửi lên)
+            const updateData = {};
+            
+            if (location !== undefined) updateData.location = location;
+            if (urgency !== undefined && ['CỰC KỲ KHẨN CẤP', 'KHẨN CẤP', 'CẦN CỨU TRỢ'].includes(urgency)) {
+                updateData.urgency = urgency;
+            }
+            if (people !== undefined) updateData.people = people;
+            if (needs !== undefined) updateData.needs = needs;
+            if (description !== undefined) updateData.description = description;
+            if (contact !== undefined) updateData.contact = contact;
+            if (contactFull !== undefined) updateData.contactFull = contactFull;
+            if (status !== undefined && ['Chưa xử lý', 'Đang xử lý', 'Đã xử lý', 'Không thể cứu'].includes(status)) {
+                updateData.status = status;
+                if (status === 'Đã xử lý' && !request.processedAt) {
+                    updateData.processedAt = new Date();
+                }
+            }
+            if (assignedTo !== undefined) updateData.assignedTo = assignedTo;
+            if (notes !== undefined) updateData.notes = notes;
+            if (facebookUrl !== undefined) updateData.facebookUrl = facebookUrl;
+            if (googleMapsUrl !== undefined) updateData.googleMapsUrl = googleMapsUrl;
+
+            // Validate và update coords
+            if (coords !== undefined) {
+                let finalCoords = null;
+                if (Array.isArray(coords) && coords.length === 2) {
+                    const [lng, lat] = coords;
+                    if (typeof lng === 'number' && typeof lat === 'number' &&
+                        !isNaN(lng) && !isNaN(lat) &&
+                        lng >= -180 && lng <= 180 &&
+                        lat >= -90 && lat <= 90) {
+                        finalCoords = [lng, lat];
+                    }
+                } else if (coords && typeof coords === 'object') {
+                    const { lng, lat } = coords;
+                    if (typeof lng === 'number' && typeof lat === 'number' &&
+                        !isNaN(lng) && !isNaN(lat) &&
+                        lng >= -180 && lng <= 180 &&
+                        lat >= -90 && lat <= 90) {
+                        finalCoords = [lng, lat];
+                    }
+                }
+                
+                if (finalCoords) {
+                    updateData.coords = finalCoords;
+                } else if (coords !== null) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Tọa độ không hợp lệ. Vui lòng cung cấp [lng, lat] hoặc { lng, lat }'
+                    });
+                }
+            }
+
+            // Update request
+            const updatedRequest = await RescueRequest.findByIdAndUpdate(
+                id,
+                updateData,
+                { new: true, runValidators: true }
+            );
+
+            if (!updatedRequest) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Không tìm thấy rescue request sau khi update'
+                });
+            }
+
+            console.log(`✅ Admin đã cập nhật rescue request: ${id}`);
+
+            res.json({
+                success: true,
+                message: 'Đã cập nhật thông tin thành công',
+                data: updatedRequest
+            });
+        } catch (error) {
+            logger.error('Lỗi khi cập nhật rescue request', error, req);
+            res.status(500).json({
+                success: false,
+                message: 'Lỗi khi cập nhật thông tin',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Xóa rescue request (Admin only)
+     * DELETE /api/rescue-requests/:id
+     */
+    async delete(req, res) {
+        try {
+            const { id } = req.params;
+
+            // Validate ID
+            if (!id) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'ID không hợp lệ'
+                });
+            }
+
+            // Tìm và xóa rescue request
+            const request = await RescueRequest.findByIdAndDelete(id);
+
+            if (!request) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Không tìm thấy rescue request'
+                });
+            }
+
+            // Xóa hình ảnh nếu có
+            if (request.imagePath) {
+                try {
+                    const fs = await import('fs');
+                    const path = await import('path');
+                    const { fileURLToPath } = await import('url');
+                    const { dirname } = await import('path');
+                    
+                    const __filename = fileURLToPath(import.meta.url);
+                    const __dirname = dirname(__filename);
+                    const imagePath = path.join(__dirname, '..', request.imagePath);
+                    
+                    if (fs.existsSync(imagePath)) {
+                        fs.unlinkSync(imagePath);
+                        console.log(`🗑️  Đã xóa hình ảnh: ${imagePath}`);
+                    }
+                } catch (imgError) {
+                    console.warn('⚠️  Không thể xóa hình ảnh:', imgError);
+                    // Không fail nếu không xóa được ảnh
+                }
+            }
+
+            console.log(`✅ Admin đã xóa rescue request: ${id}`);
+
+            res.json({
+                success: true,
+                message: 'Đã xóa rescue request thành công',
+                data: { id }
+            });
+        } catch (error) {
+            logger.error('Lỗi khi xóa rescue request', error, req);
+            res.status(500).json({
+                success: false,
+                message: 'Lỗi khi xóa rescue request',
+                error: error.message
+            });
+        }
+    }
+
+    /**
      * Cập nhật tọa độ của rescue request
      * PUT /api/rescue-requests/:id/coords
      * Hỗ trợ cả RescueRequest và Report (manual report)

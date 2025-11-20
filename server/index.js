@@ -100,6 +100,11 @@ const PORT = process.env.PORT || 5000;
 // ====================
 // MIDDLEWARE
 // ====================
+// Trust proxy - Cần thiết khi chạy sau Nginx reverse proxy
+// Chỉ trust 1 hop (Nginx) để tránh bypass rate limiting
+// Trong Docker, chỉ có 1 proxy là Nginx frontend container
+app.set('trust proxy', 1);
+
 // CORS configuration - Dev: tắt CORS, Production: restrict
 const isDevelopment = process.env.NODE_ENV !== 'production';
 
@@ -186,6 +191,11 @@ const limiter = rateLimit({
     },
     standardHeaders: true, // Trả về rate limit info trong headers (RateLimit-*)
     legacyHeaders: false, // Không dùng X-RateLimit-* headers
+    // Trust proxy đã được set ở app level (trust proxy: 1)
+    // Tắt validation warning vì đã cấu hình đúng (chỉ trust 1 hop)
+    validate: {
+        trustProxy: false // Tắt validation vì đã cấu hình đúng ở app level
+    },
     skip: (req) => {
         // Skip rate limiting cho health check endpoint
         return req.path === '/api/health';

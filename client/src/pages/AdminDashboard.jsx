@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Layout, Card, Table, Button, Select, Input, Tag, Space, Typography, Statistic, Row, Col, message, Modal, Upload, Tabs, Image, Form } from 'antd';
-import { PhoneOutlined, GlobalOutlined, ReloadOutlined, DownloadOutlined, SearchOutlined, FilterOutlined, UploadOutlined, PictureOutlined } from '@ant-design/icons';
+import { Layout, Card, Table, Button, Select, Input, Tag, Space, Typography, Statistic, Row, Col, message, Modal, Upload, Tabs, Image, Form, Popconfirm } from 'antd';
+import { PhoneOutlined, GlobalOutlined, ReloadOutlined, DownloadOutlined, SearchOutlined, FilterOutlined, UploadOutlined, PictureOutlined, EditOutlined, DeleteOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import './AdminDashboard.css';
@@ -31,6 +31,12 @@ function AdminDashboard() {
     const [safePointModalVisible, setSafePointModalVisible] = useState(false);
     const [editingSafePoint, setEditingSafePoint] = useState(null);
     const [safePointForm] = Form.useForm();
+
+    // Edit Rescue Request states
+    const [editRequestModalVisible, setEditRequestModalVisible] = useState(false);
+    const [editingRequest, setEditingRequest] = useState(null);
+    const [editRequestLoading, setEditRequestLoading] = useState(false);
+    const [editRequestForm] = Form.useForm();
 
     // Filters
     const [urgencyFilter, setUrgencyFilter] = useState(null);
@@ -127,6 +133,111 @@ function AdminDashboard() {
     const exportExcel = () => {
         window.open(`${API_URL}/api/admin/export-excel`, '_blank');
         message.success('Đang tải xuống Excel...');
+    };
+
+    // Open edit modal
+    const openEditModal = (record) => {
+        setEditingRequest(record);
+        editRequestForm.setFieldsValue({
+            location: record.location || '',
+            description: record.description || '',
+            urgency: record.urgency || 'CẦN CỨU TRỢ',
+            people: record.people || '',
+            needs: record.needs || '',
+            contact: record.contact || '',
+            contactFull: record.contactFull || '',
+            status: record.status || 'Chưa xử lý',
+            assignedTo: record.assignedTo || '',
+            notes: record.notes || '',
+            facebookUrl: record.facebookUrl || '',
+            coords: record.coords && record.coords.length === 2 
+                ? `${record.coords[1]}, ${record.coords[0]}` 
+                : ''
+        });
+        setEditRequestModalVisible(true);
+    };
+
+    // Handle edit form submit
+    const handleEditSubmit = async (values) => {
+        if (!editingRequest) return;
+
+        setEditRequestLoading(true);
+        try {
+            // Parse coords từ string "lat, lng" hoặc "lng, lat"
+            let coords = null;
+            if (values.coords && values.coords.trim()) {
+                const coordsStr = values.coords.trim();
+                const parts = coordsStr.split(',').map(s => s.trim());
+                if (parts.length === 2) {
+                    const num1 = parseFloat(parts[0]);
+                    const num2 = parseFloat(parts[1]);
+                    if (!isNaN(num1) && !isNaN(num2)) {
+                        // Nếu số đầu > 90 thì là lng, số sau là lat
+                        if (Math.abs(num1) > 90) {
+                            coords = [num1, num2]; // [lng, lat]
+                        } else {
+                            coords = [num2, num1]; // [lng, lat]
+                        }
+                    }
+                }
+            }
+
+            const updateData = {
+                location: values.location,
+                description: values.description,
+                urgency: values.urgency,
+                people: values.people,
+                needs: values.needs,
+                contact: values.contact,
+                contactFull: values.contactFull,
+                status: values.status,
+                assignedTo: values.assignedTo,
+                notes: values.notes,
+                facebookUrl: values.facebookUrl
+            };
+
+            if (coords) {
+                updateData.coords = coords;
+            }
+
+            const response = await axios.put(
+                `${API_URL}/api/rescue-requests/${editingRequest._id}`,
+                updateData
+            );
+
+            if (response.data.success) {
+                message.success('Đã cập nhật thông tin thành công!');
+                setEditRequestModalVisible(false);
+                setEditingRequest(null);
+                editRequestForm.resetFields();
+                fetchRequests(pagination.page);
+                fetchStats();
+            } else {
+                message.error(response.data.message || 'Cập nhật thất bại');
+            }
+        } catch (error) {
+            console.error('Lỗi cập nhật:', error);
+            message.error(error.response?.data?.message || 'Lỗi khi cập nhật thông tin');
+        } finally {
+            setEditRequestLoading(false);
+        }
+    };
+
+    // Handle delete
+    const handleDelete = async (id) => {
+        try {
+            const response = await axios.delete(`${API_URL}/api/rescue-requests/${id}`);
+            if (response.data.success) {
+                message.success('Đã xóa báo cáo thành công!');
+                fetchRequests(pagination.page);
+                fetchStats();
+            } else {
+                message.error(response.data.message || 'Xóa thất bại');
+            }
+        } catch (error) {
+            console.error('Lỗi xóa:', error);
+            message.error(error.response?.data?.message || 'Lỗi khi xóa báo cáo');
+        }
     };
 
     // Fetch hotlines
@@ -394,9 +505,34 @@ function AdminDashboard() {
         {
             title: 'Thao tác',
             key: 'action',
-            width: 180,
+            width: 250,
             render: (_, record) => (
-                <Space>
+                <Space size="small" wrap>
+                    <Button
+                        size="small"
+                        type="primary"
+                        icon={<EditOutlined />}
+                        onClick={() => openEditModal(record)}
+                    >
+                        Sửa
+                    </Button>
+                    <Popconfirm
+                        title="Xóa báo cáo này?"
+                        description="Bạn có chắc chắn muốn xóa báo cáo này? Hành động này không thể hoàn tác."
+                        icon={<ExclamationCircleOutlined style={{ color: 'red' }} />}
+                        onConfirm={() => handleDelete(record._id)}
+                        okText="Xóa"
+                        cancelText="Hủy"
+                        okButtonProps={{ danger: true }}
+                    >
+                        <Button
+                            size="small"
+                            danger
+                            icon={<DeleteOutlined />}
+                        >
+                            Xóa
+                        </Button>
+                    </Popconfirm>
                     {record.contactFull && (
                         <Button
                             size="small"
@@ -1000,6 +1136,165 @@ function AdminDashboard() {
                                     safePointForm.resetFields();
                                     setEditingSafePoint(null);
                                 }}>
+                                    Hủy
+                                </Button>
+                            </Space>
+                        </Form.Item>
+                    </Form>
+                </Modal>
+
+                {/* Modal Chỉnh sửa Rescue Request */}
+                <Modal
+                    title="Chỉnh sửa Báo cáo Yêu cầu Cứu hộ"
+                    open={editRequestModalVisible}
+                    onCancel={() => {
+                        setEditRequestModalVisible(false);
+                        setEditingRequest(null);
+                        editRequestForm.resetFields();
+                    }}
+                    footer={null}
+                    width={800}
+                    destroyOnClose={true}
+                >
+                    <Form
+                        form={editRequestForm}
+                        layout="vertical"
+                        onFinish={handleEditSubmit}
+                        initialValues={{
+                            urgency: 'CẦN CỨU TRỢ',
+                            status: 'Chưa xử lý'
+                        }}
+                    >
+                        <Form.Item
+                            label="Địa điểm"
+                            name="location"
+                            rules={[{ required: true, message: 'Vui lòng nhập địa điểm' }]}
+                        >
+                            <Input placeholder="Ví dụ: Xã ABC, huyện XYZ, tỉnh Phú Yên" />
+                        </Form.Item>
+
+                        <Form.Item
+                            label="Mô tả"
+                            name="description"
+                            rules={[{ required: true, message: 'Vui lòng nhập mô tả' }]}
+                        >
+                            <Input.TextArea rows={4} placeholder="Mô tả chi tiết tình huống" />
+                        </Form.Item>
+
+                        <Row gutter={16}>
+                            <Col span={12}>
+                                <Form.Item
+                                    label="Độ khẩn cấp"
+                                    name="urgency"
+                                    rules={[{ required: true, message: 'Vui lòng chọn độ khẩn cấp' }]}
+                                >
+                                    <Select>
+                                        <Option value="CỰC KỲ KHẨN CẤP">CỰC KỲ KHẨN CẤP</Option>
+                                        <Option value="KHẨN CẤP">KHẨN CẤP</Option>
+                                        <Option value="CẦN CỨU TRỢ">CẦN CỨU TRỢ</Option>
+                                    </Select>
+                                </Form.Item>
+                            </Col>
+                            <Col span={12}>
+                                <Form.Item
+                                    label="Trạng thái"
+                                    name="status"
+                                    rules={[{ required: true, message: 'Vui lòng chọn trạng thái' }]}
+                                >
+                                    <Select>
+                                        <Option value="Chưa xử lý">Chưa xử lý</Option>
+                                        <Option value="Đang xử lý">Đang xử lý</Option>
+                                        <Option value="Đã xử lý">Đã xử lý</Option>
+                                        <Option value="Không thể cứu">Không thể cứu</Option>
+                                    </Select>
+                                </Form.Item>
+                            </Col>
+                        </Row>
+
+                        <Row gutter={16}>
+                            <Col span={12}>
+                                <Form.Item
+                                    label="Số người"
+                                    name="people"
+                                >
+                                    <Input placeholder="Ví dụ: 5 người, trong đó có 2 trẻ em" />
+                                </Form.Item>
+                            </Col>
+                            <Col span={12}>
+                                <Form.Item
+                                    label="Nhu cầu"
+                                    name="needs"
+                                >
+                                    <Input placeholder="Ví dụ: Cần cứu hộ, thực phẩm, nước uống" />
+                                </Form.Item>
+                            </Col>
+                        </Row>
+
+                        <Row gutter={16}>
+                            <Col span={12}>
+                                <Form.Item
+                                    label="Số điện thoại"
+                                    name="contact"
+                                >
+                                    <Input placeholder="Ví dụ: 0912345678" />
+                                </Form.Item>
+                            </Col>
+                            <Col span={12}>
+                                <Form.Item
+                                    label="Tất cả số điện thoại"
+                                    name="contactFull"
+                                    help="Nếu có nhiều số, phân cách bằng dấu phẩy"
+                                >
+                                    <Input placeholder="Ví dụ: 0912345678, 0987654321" />
+                                </Form.Item>
+                            </Col>
+                        </Row>
+
+                        <Form.Item
+                            label="Tọa độ GPS"
+                            name="coords"
+                            help="Nhập theo format: lat, lng hoặc lng, lat (ví dụ: 13.08, 109.30)"
+                        >
+                            <Input placeholder="Ví dụ: 13.08, 109.30" />
+                        </Form.Item>
+
+                        <Form.Item
+                            label="Link Facebook"
+                            name="facebookUrl"
+                        >
+                            <Input placeholder="https://facebook.com/..." />
+                        </Form.Item>
+
+                        <Form.Item
+                            label="Người xử lý"
+                            name="assignedTo"
+                        >
+                            <Input placeholder="Tên người được gán xử lý" />
+                        </Form.Item>
+
+                        <Form.Item
+                            label="Ghi chú"
+                            name="notes"
+                        >
+                            <Input.TextArea rows={3} placeholder="Ghi chú nội bộ" />
+                        </Form.Item>
+
+                        <Form.Item>
+                            <Space>
+                                <Button
+                                    type="primary"
+                                    htmlType="submit"
+                                    loading={editRequestLoading}
+                                >
+                                    Cập nhật
+                                </Button>
+                                <Button
+                                    onClick={() => {
+                                        setEditRequestModalVisible(false);
+                                        setEditingRequest(null);
+                                        editRequestForm.resetFields();
+                                    }}
+                                >
                                     Hủy
                                 </Button>
                             </Space>

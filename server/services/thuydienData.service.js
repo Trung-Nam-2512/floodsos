@@ -34,18 +34,35 @@ class ThuydienDataService {
             }
 
             const lines = content.split("\n").filter(line => line.trim());
-            if (lines.length < 2) {
-                return []; // Cần ít nhất header và 1 row data
+            if (lines.length < 1) {
+                return []; // Cần ít nhất 1 dòng data
             }
 
-            // Parse header (dòng đầu tiên)
-            const headers = lines[0].split(";").map(h => h.trim());
+            // Header mặc định cho thủy điện
+            const defaultHeaders = ["Time", "Htl", "Hdbt", "Hc", "Qve", "ΣQx", "Qxt", "Qxm", "Ncxs", "Ncxm"];
+
+            // Kiểm tra xem dòng đầu tiên có phải là header không
+            const firstLine = lines[0].toLowerCase();
+            const isHeader = firstLine.includes("time") || firstLine.includes("htl") || firstLine.includes("hdbt");
+
+            let headers;
+            let dataStartIndex;
+
+            if (isHeader) {
+                // Dòng đầu tiên là header
+                headers = lines[0].split(";").map(h => h.trim());
+                dataStartIndex = 1;
+            } else {
+                // Không có header, dùng header mặc định
+                headers = defaultHeaders;
+                dataStartIndex = 0;
+            }
 
             // Parse data rows
             const data = [];
             const seenTimes = new Set(); // Để loại bỏ trùng lặp
 
-            for (let i = 1; i < lines.length; i++) {
+            for (let i = dataStartIndex; i < lines.length; i++) {
                 const values = lines[i].split(";").map(v => v.trim());
                 const row = {};
                 headers.forEach((header, index) => {
@@ -87,9 +104,11 @@ class ThuydienDataService {
      * @returns {string} Đường dẫn file CSV
      */
     getFilePathForDate(reservoirSlug, date = new Date()) {
-        const year = date.getFullYear();
-        const month = String(date.getMonth() + 1).padStart(2, "0");
-        const day = String(date.getDate()).padStart(2, "0");
+        // Dùng timezone Việt Nam (GMT+7) để tạo file path
+        const vietnamTime = new Date(date.toLocaleString("en-US", { timeZone: "Asia/Ho_Chi_Minh" }));
+        const year = vietnamTime.getFullYear();
+        const month = String(vietnamTime.getMonth() + 1).padStart(2, "0");
+        const day = String(vietnamTime.getDate()).padStart(2, "0");
 
         return path.join(
             this.getDataDirectory(),
