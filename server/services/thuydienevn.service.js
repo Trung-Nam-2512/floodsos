@@ -4,6 +4,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
+import logger from "../utils/logger.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -159,33 +160,79 @@ function sanitizeFileName(input) {
 function appendIfDifferent(filePath, newRow) {
     // Read existing file
     const content = fs.readFileSync(filePath, "utf8").trim();
-    const lines = content.split("\n");
-
-    const lastRow = lines[lines.length - 1];
-
-    // Compare and append if different
-    if (lastRow !== newRow) {
+    const lines = content.split("\n").filter(line => line.trim());
+    
+    if (lines.length < 2) {
+        // File chỉ có header hoặc rỗng, append trực tiếp
         fs.appendFileSync(filePath, newRow + "\n");
-        console.log(filePath, " New row appended.");
-    } else {
-        console.log(filePath, " Row is the same as last one. Skipped appending.");
+        console.log(filePath, " New row appended (first data row).");
+        return;
     }
+
+    const header = lines[0];
+    const dataRows = lines.slice(1);
+    
+    // Parse Time từ newRow để so sánh
+    const newRowTime = newRow.split(";")[0];
+    
+    // Kiểm tra xem đã có dòng với cùng Time chưa (trùng lặp)
+    const isDuplicate = dataRows.some(row => {
+        const rowTime = row.split(";")[0];
+        return rowTime === newRowTime;
+    });
+    
+    if (isDuplicate) {
+        console.log(filePath, " Row với Time", newRowTime, "đã tồn tại. Skipped.");
+        return;
+    }
+    
+    // Kiểm tra xem có khác dòng cuối không (tránh append cùng dữ liệu liên tiếp)
+    const lastRow = dataRows[dataRows.length - 1];
+    if (lastRow === newRow) {
+        console.log(filePath, " Row is the same as last one. Skipped appending.");
+        return;
+    }
+    
+    // Thêm dòng mới vào mảng và sắp xếp lại theo Time
+    const allRows = [...dataRows, newRow];
+    
+    // Sắp xếp theo Time (từ cũ đến mới)
+    allRows.sort((a, b) => {
+        const timeA = a.split(";")[0];
+        const timeB = b.split(";")[0];
+        const dateA = new Date(timeA);
+        const dateB = new Date(timeB);
+        
+        if (isNaN(dateA.getTime()) || isNaN(dateB.getTime())) {
+            return timeA.localeCompare(timeB);
+        }
+        
+        return dateA - dateB;
+    });
+    
+    // Ghi lại toàn bộ file với dữ liệu đã sắp xếp
+    const newContent = header + "\n" + allRows.join("\n") + "\n";
+    fs.writeFileSync(filePath, newContent, "utf8");
+    console.log(filePath, " New row appended and file sorted by Time.");
 }
 
 function fetchData1() {
     const currentURL = `${url}?td=${encodeURIComponent(formatDateTime())}`;
-    https
-        .get(currentURL, (res) => {
-            let data = "";
+    
+    // Tạo request với timeout
+    const request = https.get(currentURL, {
+        timeout: 30000, // 30 giây timeout
+    }, (res) => {
+        let data = "";
 
-            // Set encoding to get text
-            res.setEncoding("utf8");
+        // Set encoding to get text
+        res.setEncoding("utf8");
 
-            res.on("data", (chunk) => {
-                data += chunk;
-            });
+        res.on("data", (chunk) => {
+            data += chunk;
+        });
 
-            res.on("end", () => {
+        res.on("end", () => {
                 // console.log(data); // HTML content
                 const $ = cheerio.load(data);
 
@@ -270,11 +317,31 @@ function fetchData1() {
                 }
 
                 //console.log(JSON.stringify(json, null, 2));
+            }).on("error", (err) => {
+                // Xử lý lỗi khi parse HTML hoặc response stream
+                logger.warn(`⚠️  Lỗi khi xử lý response thủy điện: ${err.message}`);
             });
-        })
-        .on("error", (err) => {
-            console.error("Error:", err.message);
         });
+    
+    // Xử lý lỗi network cho request
+    request.on("error", (err) => {
+        // Xử lý các lỗi network
+        if (err.code === 'ECONNRESET') {
+            logger.warn('⚠️  Thủy điện EVN: Connection reset (ECONNRESET). Sẽ thử lại ở lần fetch tiếp theo.');
+        } else if (err.code === 'ETIMEDOUT' || err.code === 'ESOCKETTIMEDOUT') {
+            logger.warn('⚠️  Thủy điện EVN: Connection timeout. Sẽ thử lại ở lần fetch tiếp theo.');
+        } else if (err.code === 'ENOTFOUND' || err.code === 'ECONNREFUSED') {
+            logger.error(`❌ Thủy điện EVN: Không thể kết nối đến server. ${err.message}`);
+        } else {
+            logger.error(`❌ Thủy điện EVN: Lỗi khi fetch dữ liệu - ${err.message}`);
+        }
+    });
+    
+    // Set timeout cho request
+    request.setTimeout(30000, () => {
+        request.destroy(); // Hủy request khi timeout
+        logger.warn('⚠️  Thủy điện EVN: Request timeout sau 30 giây. Sẽ thử lại ở lần fetch tiếp theo.');
+    });
 }
 
 /**

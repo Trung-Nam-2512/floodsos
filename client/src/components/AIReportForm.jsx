@@ -7,7 +7,9 @@ import './AIReportForm.css'
 const { TextArea } = Input
 const { Title, Text } = Typography
 
-const API_URL = import.meta.env.VITE_API_URL || import.meta.env.REACT_APP_API_URL || 'http://localhost:5000'
+// Trong production (Docker), VITE_API_URL có thể là empty để dùng relative path /api (nginx proxy)
+// Trong development, dùng localhost:5000
+const API_URL = import.meta.env.VITE_API_URL || import.meta.env.REACT_APP_API_URL || (import.meta.env.MODE === 'production' ? '' : 'http://localhost:5000')
 
 function AIReportForm({ onSuccess }) {
     const [form] = Form.useForm()
@@ -117,7 +119,7 @@ function AIReportForm({ onSuccess }) {
         }
 
         if (file && file instanceof File) {
-            console.log('✅ File detected:', file.name, file.size, 'bytes');
+            // console.log('✅ File detected:', file.name, file.size, 'bytes');
             setImageFile(file);
             message.success(`Đã chọn ảnh: ${file.name}`);
         } else {
@@ -156,13 +158,13 @@ function AIReportForm({ onSuccess }) {
         try {
             setLoading(true)
 
-            console.log('📤 Sending request to:', `${API_URL}/api/ai-report`);
-            console.log('📦 Request data:', {
-                rawText: requestData.rawText?.substring(0, 100) + '...',
-                facebookUrl: requestData.facebookUrl,
-                hasImage: !!requestData.imageBase64,
-                imageBase64Length: requestData.imageBase64 ? requestData.imageBase64.length : 0
-            });
+            // console.log('📤 Sending request to:', `${API_URL}/api/ai-report`);
+            // console.log('📦 Request data:', {
+            //     rawText: requestData.rawText?.substring(0, 100) + '...',
+            //     facebookUrl: requestData.facebookUrl,
+            //     hasImage: !!requestData.imageBase64,
+            //     imageBase64Length: requestData.imageBase64 ? requestData.imageBase64.length : 0
+            // });
 
             const response = await axios.post(`${API_URL}/api/ai-report`, requestData)
 
@@ -216,14 +218,14 @@ function AIReportForm({ onSuccess }) {
             // Convert ảnh sang base64 nếu có
             let imageBase64 = null
             if (imageFile) {
-                console.log('📸 Converting image to base64...');
-                console.log('   File name:', imageFile.name);
-                console.log('   File size:', imageFile.size, 'bytes');
+                // console.log('📸 Converting image to base64...');
+                // console.log('   File name:', imageFile.name);   
+                // console.log('   File size:', imageFile.size, 'bytes');
                 try {
                     imageBase64 = await new Promise((resolve, reject) => {
                         const reader = new FileReader()
                         reader.onloadend = () => {
-                            console.log('✅ Image converted, size:', reader.result.length, 'bytes');
+                            // console.log('✅ Image converted, size:', reader.result.length, 'bytes');    
                             resolve(reader.result)
                         }
                         reader.onerror = (error) => {
@@ -237,7 +239,7 @@ function AIReportForm({ onSuccess }) {
                     message.warning('Không thể xử lý ảnh, sẽ gửi không có ảnh');
                 }
             } else {
-                console.log('ℹ️  Không có ảnh');
+                // console.log('ℹ️  Không có ảnh');
             }
 
             const requestData = {
@@ -249,11 +251,11 @@ function AIReportForm({ onSuccess }) {
             }
 
             if (parsedCoords) {
-                console.log('📍 Sử dụng tọa độ từ Google Maps:', parsedCoords);
+                // console.log('📍 Sử dụng tọa độ từ Google Maps:', parsedCoords);
             }
 
             // Check duplicate trước khi submit
-            console.log('🔍 Đang kiểm tra trùng lặp...')
+            // console.log('🔍 Đang kiểm tra trùng lặp...')
             const duplicateResult = await checkDuplicate(requestData)
 
             if (duplicateResult.isDuplicate && duplicateResult.duplicates.length > 0) {

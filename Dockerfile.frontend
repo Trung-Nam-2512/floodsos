@@ -11,11 +11,23 @@ ARG VITE_MAPBOX_TOKEN
 ENV VITE_API_URL=$VITE_API_URL
 ENV VITE_MAPBOX_TOKEN=$VITE_MAPBOX_TOKEN
 
+# Configure npm để tăng timeout và retry (trước khi copy package.json)
+RUN npm config set fetch-retries 5 && \
+    npm config set fetch-retry-mintimeout 20000 && \
+    npm config set fetch-retry-maxtimeout 120000 && \
+    npm config set fetch-timeout 300000 && \
+    npm config set registry https://registry.npmjs.org/
+
 # Copy package files
 COPY client/package*.json ./
 
-# Install dependencies
-RUN npm ci
+# Install dependencies với retry logic
+RUN set -e; \
+    for i in 1 2 3; do \
+    echo "Attempt $i: Installing dependencies..."; \
+    npm ci --prefer-offline --no-audit && break || \
+    (echo "Attempt $i failed, waiting 10 seconds..." && sleep 10); \
+    done
 
 # Copy source code
 COPY client/ ./

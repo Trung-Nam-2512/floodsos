@@ -1,4 +1,4 @@
-# Docker Compose cho wrs.edu.vn - Port 3555
+# Docker Compose cho wrs.edu.vn - Port 1355
 # version: '3.8'  # Obsolete in newer docker-compose
 
 services:
@@ -81,12 +81,13 @@ services:
       context: .
       dockerfile: Dockerfile.frontend
       args:
-        - VITE_API_URL=${VITE_API_URL:-https://wrs.edu.vn}
+        # Dùng empty string để frontend dùng relative path /api (nginx sẽ proxy)
+        - VITE_API_URL=${VITE_API_URL:-}
         - VITE_MAPBOX_TOKEN=${VITE_MAPBOX_TOKEN}
     container_name: cuuho-frontend
     restart: unless-stopped
     ports:
-      - "${FRONTEND_PORT:-3555}:80" # Port 3555 cho wrs.edu.vn
+      - "${FRONTEND_PORT:-1355}:80" # Port 1355 cho wrs.edu.vn
     depends_on:
       - backend
     networks:

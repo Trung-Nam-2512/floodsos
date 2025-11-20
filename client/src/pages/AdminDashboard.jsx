@@ -9,7 +9,9 @@ const { Header, Content } = Layout;
 const { Title, Text } = Typography;
 const { Option } = Select;
 
-const API_URL = import.meta.env.VITE_API_URL || import.meta.env.REACT_APP_API_URL || 'http://localhost:5000';
+// Trong production (Docker), VITE_API_URL có thể là empty để dùng relative path /api (nginx proxy)
+// Trong development, dùng localhost:5000
+const API_URL = import.meta.env.VITE_API_URL || import.meta.env.REACT_APP_API_URL || (import.meta.env.MODE === 'production' ? '' : 'http://localhost:5000');
 
 function AdminDashboard() {
     const navigate = useNavigate();

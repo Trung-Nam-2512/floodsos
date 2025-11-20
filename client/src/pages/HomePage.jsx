@@ -12,7 +12,9 @@ const { Header, Content } = Layout
 const { TextArea } = Input
 const { Title, Text } = Typography
 
-const API_URL = import.meta.env.VITE_API_URL || import.meta.env.REACT_APP_API_URL || 'http://localhost:5000'
+// Trong production (Docker), VITE_API_URL có thể là empty để dùng relative path /api (nginx proxy)
+// Trong development, dùng localhost:5000
+const API_URL = import.meta.env.VITE_API_URL || import.meta.env.REACT_APP_API_URL || (import.meta.env.MODE === 'production' ? '' : 'http://localhost:5000')
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN || import.meta.env.REACT_APP_MAPBOX_TOKEN || ''
 
 // Dữ liệu fallback offline

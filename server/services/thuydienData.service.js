@@ -20,7 +20,7 @@ class ThuydienDataService {
     /**
      * Parse CSV file với delimiter là semicolon (;)
      * @param {string} filePath - Đường dẫn đến file CSV
-     * @returns {Array<Object>} Array of objects với keys là header columns
+     * @returns {Array<Object>} Array of objects với keys là header columns, đã được sắp xếp theo thời gian từ cũ đến mới
      */
     parseCSV(filePath) {
         try {
@@ -40,17 +40,38 @@ class ThuydienDataService {
 
             // Parse header (dòng đầu tiên)
             const headers = lines[0].split(";").map(h => h.trim());
-            
+
             // Parse data rows
             const data = [];
+            const seenTimes = new Set(); // Để loại bỏ trùng lặp
+
             for (let i = 1; i < lines.length; i++) {
                 const values = lines[i].split(";").map(v => v.trim());
                 const row = {};
                 headers.forEach((header, index) => {
                     row[header] = values[index] || "";
                 });
-                data.push(row);
+
+                // Chỉ thêm nếu có Time và chưa tồn tại (loại bỏ trùng lặp)
+                if (row.Time && !seenTimes.has(row.Time)) {
+                    seenTimes.add(row.Time);
+                    data.push(row);
+                }
             }
+
+            // Sắp xếp theo thời gian từ cũ đến mới (tăng dần)
+            data.sort((a, b) => {
+                if (!a.Time || !b.Time) return 0;
+                const timeA = new Date(a.Time);
+                const timeB = new Date(b.Time);
+
+                // Nếu không parse được Date, so sánh string
+                if (isNaN(timeA.getTime()) || isNaN(timeB.getTime())) {
+                    return a.Time.localeCompare(b.Time);
+                }
+
+                return timeA - timeB;
+            });
 
             return data;
         } catch (error) {
@@ -69,7 +90,7 @@ class ThuydienDataService {
         const year = date.getFullYear();
         const month = String(date.getMonth() + 1).padStart(2, "0");
         const day = String(date.getDate()).padStart(2, "0");
-        
+
         return path.join(
             this.getDataDirectory(),
             String(year),
@@ -87,7 +108,7 @@ class ThuydienDataService {
     getLatestData(reservoirSlug) {
         // Thử lấy từ hôm nay trước
         let filePath = this.getFilePathForDate(reservoirSlug, new Date());
-        
+
         // Nếu không có, thử lấy từ hôm qua
         if (!fs.existsSync(filePath)) {
             const yesterday = new Date();
@@ -129,7 +150,7 @@ class ThuydienDataService {
     getDataByDateRange(reservoirSlug, startDate, endDate) {
         const allData = [];
         const currentDate = new Date(startDate);
-        
+
         while (currentDate <= endDate) {
             const dayData = this.getDataByDate(reservoirSlug, new Date(currentDate));
             allData.push(...dayData);
@@ -180,7 +201,7 @@ class ThuydienDataService {
                     for (const day of days) {
                         const dayPath = path.join(monthPath, day);
                         const csvFile = path.join(dayPath, `${reservoirSlug}.csv`);
-                        
+
                         if (fs.existsSync(csvFile)) {
                             availableDates.push(`${year}-${month}-${day}`);
                         }

@@ -114,21 +114,47 @@ if (isDevelopment) {
     }));
 } else {
     // Production mode: Chỉ cho phép FRONTEND_URL
-    const allowedOrigins = process.env.FRONTEND_URL
+    const frontendUrls = process.env.FRONTEND_URL
         ? process.env.FRONTEND_URL.split(',').map(url => url.trim())
         : ['https://wrs.edu.vn'];
 
-    console.log('🔒 Production mode: CORS chỉ cho phép:', allowedOrigins);
+    // Tự động thêm http:// và https:// cho mỗi domain
+    const allowedOrigins = new Set();
+    frontendUrls.forEach(url => {
+        // Thêm https:// nếu chưa có
+        if (url.startsWith('http://')) {
+            allowedOrigins.add(url);
+            allowedOrigins.add(url.replace('http://', 'https://'));
+        } else if (url.startsWith('https://')) {
+            allowedOrigins.add(url);
+            allowedOrigins.add(url.replace('https://', 'http://'));
+        } else {
+            // Nếu không có protocol, thêm cả http và https
+            allowedOrigins.add(`http://${url}`);
+            allowedOrigins.add(`https://${url}`);
+        }
+    });
+
+    console.log('🔒 Production mode: CORS chỉ cho phép:', Array.from(allowedOrigins));
     app.use(cors({
         origin: (origin, callback) => {
-            // Cho phép requests không có origin (mobile apps, Postman, etc.)
-            if (!origin) return callback(null, true);
-
-            if (allowedOrigins.includes(origin)) {
-                callback(null, true);
-            } else {
-                callback(new Error('Not allowed by CORS'));
+            // Cho phép requests không có origin (mobile apps, Postman, same-origin requests, Docker internal)
+            if (!origin) {
+                return callback(null, true);
             }
+
+            // Kiểm tra xem origin có trong danh sách cho phép không
+            if (allowedOrigins.has(origin)) {
+                return callback(null, true);
+            }
+
+            // Log để debug (chỉ trong development hoặc khi cần)
+            if (process.env.DEBUG_CORS === 'true') {
+                console.log('⚠️  CORS blocked origin:', origin);
+                console.log('   Allowed origins:', Array.from(allowedOrigins));
+            }
+
+            callback(new Error('Not allowed by CORS'));
         },
         credentials: true,
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
