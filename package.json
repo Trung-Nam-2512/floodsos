@@ -1,0 +1,23 @@
+{
+    "name": "cuu-ho-lu-lut-mien-trung",
+    "version": "1.0.0",
+    "description": "Ứng dụng cứu hộ khẩn cấp lũ lụt miền Trung 2025",
+    "main": "server/index.js",
+    "scripts": {
+        "dev": "concurrently \"npm run server\" \"npm run client\"",
+        "server": "cd server && node index.js",
+        "client": "cd client && npm run dev",
+        "build": "cd client && npm run build",
+        "start": "cd server && node index.js"
+    },
+    "keywords": [
+        "cứu hộ",
+        "lũ lụt",
+        "khẩn cấp"
+    ],
+    "author": "",
+    "license": "MIT",
+    "devDependencies": {
+        "concurrently": "^8.2.2"
+    }
+}

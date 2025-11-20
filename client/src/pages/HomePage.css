@@ -1,0 +1,970 @@
+/* Global fix for horizontal scroll */
+body,
+html {
+    overflow-x: hidden !important;
+    width: 100% !important;
+    max-width: 100vw !important;
+}
+
+.home-layout {
+    min-height: 100vh;
+    background-color: #fff;
+    width: 100%;
+    max-width: 100vw;
+    overflow-x: hidden;
+    box-sizing: border-box;
+}
+
+.home-layout * {
+    box-sizing: border-box;
+    max-width: 100%;
+}
+
+.emergency-header {
+    background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+    padding: 16px;
+    box-shadow: 0 2px 8px rgba(220, 38, 38, 0.3);
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+}
+
+.home-content {
+    padding: 16px;
+    max-width: 1200px;
+    margin: 0 auto;
+    width: 100%;
+    overflow-x: hidden;
+    box-sizing: border-box;
+}
+
+.hotline-card,
+.map-card,
+.report-card,
+.rescue-requests-card {
+    margin-bottom: 24px;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    width: 100%;
+    max-width: 100%;
+    overflow: hidden;
+    box-sizing: border-box;
+}
+
+.hotline-card .ant-card-head {
+    background-color: #fef2f2;
+    border-bottom: 2px solid #dc2626;
+}
+
+.report-card .ant-card-head {
+    background-color: #fef2f2;
+    border-bottom: 2px solid #dc2626;
+}
+
+.rescue-requests-card .ant-card-head {
+    background-color: #fef2f2;
+    border-bottom: 2px solid #dc2626;
+}
+
+/* Rescue Item Cards - Modern & Clean Design */
+.rescue-item,
+.rescue-item-urgent {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 0;
+    margin-bottom: 16px;
+    margin-left: 0;
+    margin-right: 0;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+    cursor: pointer;
+}
+
+.rescue-item:hover,
+.rescue-item-urgent:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    transform: translateY(-2px);
+}
+
+/* Disable cursor pointer for buttons and links inside */
+.rescue-item button,
+.rescue-item-urgent button,
+.rescue-item a,
+.rescue-item-urgent a {
+    cursor: pointer !important;
+}
+
+.rescue-item:hover,
+.rescue-item-urgent:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    transform: translateY(-2px);
+}
+
+.rescue-item {
+    border-left: 4px solid #1890ff;
+}
+
+.rescue-item-urgent {
+    border-left: 4px solid #dc2626;
+    background: linear-gradient(to right, #fef2f2 0%, #ffffff 4%);
+}
+
+/* Rescue Item Content Container */
+.rescue-item-content {
+    padding: 16px 20px;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+/* Rescue Item Header: Tag và Timestamp */
+.rescue-item-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    width: 100%;
+}
+
+.rescue-item-tag {
+    margin: 0;
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-weight: 600;
+    border: none;
+    flex-shrink: 0;
+}
+
+.rescue-item-time {
+    font-size: 12px;
+    color: #9ca3af;
+    margin: 0;
+    flex-shrink: 0;
+}
+
+/* Rescue Item Description */
+.rescue-item-description {
+    margin-bottom: 12px;
+    width: 100%;
+}
+
+.rescue-item-description .ant-typography {
+    font-size: 14px;
+    color: #374151;
+    line-height: 1.6;
+    margin: 0;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    display: block;
+}
+
+/* Rescue Item Location */
+.rescue-item-location {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 12px;
+    padding: 8px 0;
+}
+
+.location-icon {
+    font-size: 14px;
+    color: #10b981;
+    flex-shrink: 0;
+}
+
+.rescue-item-location .ant-typography {
+    font-size: 13px;
+    color: #6b7280;
+    margin: 0;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+}
+
+/* Rescue Item Info */
+.rescue-item-info {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 12px;
+    width: 100%;
+}
+
+.rescue-info-item {
+    font-size: 13px;
+    color: #6b7280;
+    margin: 0;
+    line-height: 1.5;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+}
+
+.rescue-status-tag {
+    margin: 0;
+    font-size: 12px;
+    padding: 3px 10px;
+    border-radius: 6px;
+    font-weight: 500;
+    border: none;
+    flex-shrink: 0;
+}
+
+/* Rescue Item Actions */
+.rescue-item-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 8px;
+    width: 100%;
+    padding-top: 12px;
+    border-top: 1px solid #e90808;
+}
+
+.phone-button {
+    font-size: 13px !important;
+    height: 32px !important;
+    padding: 4px 14px !important;
+    border-radius: 6px !important;
+    font-weight: 500 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 6px !important;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+    transition: all 0.2s;
+}
+
+.phone-button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+}
+
+.map-link-button {
+    font-size: 13px !important;
+    padding: 4px 0 !important;
+    height: auto !important;
+    color: #1890ff !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 4px !important;
+    font-weight: 500 !important;
+    transition: all 0.2s;
+}
+
+.map-link-button:hover {
+    color: #40a9ff !important;
+}
+
+.facebook-link-button {
+    font-size: 12px !important;
+    padding: 0 !important;
+    height: auto !important;
+    color: #1890ff !important;
+    margin-top: 4px;
+}
+
+.facebook-link-button:hover {
+    color: #40a9ff !important;
+}
+
+/* Header responsive */
+.header-content-wrapper {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    gap: 12px;
+}
+
+.header-back-button {
+    color: #fff !important;
+    font-size: 18px !important;
+    padding: 4px 8px !important;
+    flex-shrink: 0;
+}
+
+.header-title-mobile {
+    display: none;
+    color: #fff !important;
+    margin: 0 !important;
+    font-size: 18px !important;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.header-title-desktop {
+    display: block;
+    color: #fff !important;
+    margin: 0 !important;
+    font-size: clamp(16px, 4vw, 22px) !important;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Card title responsive */
+.card-title-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.card-title-text {
+    font-size: 16px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+
+/* Rescue item actions - Improved layout */
+.rescue-item-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid #f0f0f0;
+}
+
+.rescue-item-info {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 4px;
+    width: 100%;
+}
+
+.rescue-item-info .ant-typography {
+    font-size: 13px;
+    color: #6b7280;
+    margin: 0;
+    line-height: 1.5;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    max-width: 100%;
+}
+
+.rescue-item-info .ant-tag {
+    margin: 0;
+    font-size: 12px;
+    padding: 3px 10px;
+    border-radius: 6px;
+    font-weight: 500;
+    border: none;
+    flex-shrink: 0;
+}
+
+.rescue-item-buttons {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
+.phone-button {
+    font-size: 13px !important;
+    height: 32px !important;
+    padding: 4px 14px !important;
+    border-radius: 6px !important;
+    font-weight: 500 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 6px !important;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+    transition: all 0.2s;
+}
+
+.phone-button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+}
+
+.map-link-button {
+    font-size: 13px !important;
+    padding: 4px 0 !important;
+    height: auto !important;
+    color: #1890ff !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 4px !important;
+    font-weight: 500 !important;
+    transition: all 0.2s;
+}
+
+.map-link-button:hover {
+    color: #40a9ff !important;
+}
+
+/* Rescue item image wrapper */
+.rescue-item-image-wrapper {
+    margin-top: 12px;
+    width: 100%;
+    max-width: 100%;
+    height: 300px;
+    overflow: hidden;
+    border-radius: 10px;
+    background: #f5f5f5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+}
+
+.rescue-item-image {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    display: block;
+}
+
+.rescue-item-image:hover {
+    transform: scale(1.05);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* Rescue item timestamp and links */
+.rescue-item .ant-list-item-meta-description .ant-typography[type="secondary"],
+.rescue-item-urgent .ant-list-item-meta-description .ant-typography[type="secondary"] {
+    font-size: 12px;
+    color: #9ca3af;
+    margin-top: 8px;
+    display: block;
+}
+
+.rescue-item .ant-list-item-meta-description .ant-btn-link,
+.rescue-item-urgent .ant-list-item-meta-description .ant-btn-link {
+    font-size: 12px;
+    padding: 0;
+    height: auto;
+    color: #1890ff;
+    margin-top: 4px;
+}
+
+.rescue-item .ant-list-item-meta-description .ant-btn-link:hover,
+.rescue-item-urgent .ant-list-item-meta-description .ant-btn-link:hover {
+    color: #40a9ff;
+}
+
+/* Full details section */
+.rescue-item-full-details {
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 12px;
+    margin-top: 12px;
+}
+
+.rescue-item-full-details-title {
+    font-size: 12px;
+    color: #374151;
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 600;
+}
+
+.rescue-item-full-details-content {
+    font-size: 12px;
+    color: #4b5563;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+}
+
+
+/* List container */
+.rescue-requests-card .ant-list {
+    margin: 0;
+}
+
+.rescue-requests-card .ant-list-item {
+    padding: 0 !important;
+    border-bottom: none !important;
+}
+
+.rescue-requests-card .ant-list-empty-text {
+    padding: 40px 20px;
+    color: #9ca3af;
+}
+
+/* Map selector */
+.map-selector-card {
+    margin-top: 8px;
+    height: 300px;
+    position: relative;
+}
+
+/* GPS buttons */
+.gps-button,
+.map-select-button {
+    font-size: 13px !important;
+}
+
+.location-tag {
+    font-size: 11px !important;
+    word-break: break-all;
+    max-width: 100%;
+}
+
+/* Refresh button */
+.refresh-button {
+    font-size: 12px !important;
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+    .home-layout {
+        overflow-x: hidden !important;
+        width: 100vw !important;
+        max-width: 100vw !important;
+    }
+
+    .home-content {
+        padding: 12px;
+        width: 100%;
+        max-width: 100%;
+        overflow-x: hidden;
+        box-sizing: border-box;
+    }
+
+    .emergency-header {
+        width: 100%;
+        max-width: 100vw;
+        overflow-x: hidden;
+        box-sizing: border-box;
+    }
+
+    .header-content-wrapper {
+        width: 100%;
+        max-width: 100%;
+        overflow: hidden;
+    }
+
+    .hotline-card,
+    .map-card,
+    .report-card,
+    .rescue-requests-card {
+        margin-bottom: 16px;
+        border-radius: 12px;
+        width: 100%;
+        max-width: 100%;
+        overflow: hidden;
+        box-sizing: border-box;
+    }
+
+    /* Ant Design components responsive */
+    .ant-card,
+    .ant-card-head,
+    .ant-card-body {
+        width: 100% !important;
+        max-width: 100% !important;
+        box-sizing: border-box !important;
+    }
+
+    .ant-row {
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        overflow-x: hidden !important;
+    }
+
+    .ant-col {
+        padding-left: 8px !important;
+        padding-right: 8px !important;
+        box-sizing: border-box !important;
+        max-width: 100% !important;
+        overflow: hidden !important;
+    }
+
+    /* Fix gutter causing overflow */
+    .ant-row>.ant-col {
+        padding-left: 8px !important;
+        padding-right: 8px !important;
+    }
+
+    .ant-space {
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+
+    .ant-form-item {
+        width: 100% !important;
+        max-width: 100% !important;
+        margin-bottom: 16px !important;
+    }
+
+    .ant-input,
+    .ant-input-affix-wrapper,
+    .ant-input-group-wrapper {
+        width: 100% !important;
+        max-width: 100% !important;
+        box-sizing: border-box !important;
+    }
+
+    .ant-btn {
+        max-width: 100% !important;
+        box-sizing: border-box !important;
+    }
+
+    .ant-list-item {
+        width: 100% !important;
+        max-width: 100% !important;
+        box-sizing: border-box !important;
+    }
+
+    .ant-list-item-meta {
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+
+    .ant-upload {
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+
+    .ant-image {
+        max-width: 100% !important;
+        width: 100% !important;
+    }
+
+    img {
+        max-width: 100% !important;
+        height: auto !important;
+        display: block !important;
+    }
+
+    table {
+        width: 100% !important;
+        max-width: 100% !important;
+        table-layout: fixed !important;
+        word-wrap: break-word !important;
+        overflow-x: auto !important;
+        display: block !important;
+    }
+
+    td,
+    th {
+        word-wrap: break-word !important;
+        overflow-wrap: break-word !important;
+        max-width: 100% !important;
+    }
+
+    /* Prevent any element from causing horizontal scroll */
+    * {
+        max-width: 100% !important;
+    }
+
+    /* Exception for specific elements that need their natural width */
+    .ant-btn,
+    .ant-tag,
+    .ant-input,
+    .ant-select {
+        max-width: 100% !important;
+    }
+
+    /* Fix Space component */
+    .ant-space-item {
+        max-width: 100% !important;
+        overflow: hidden !important;
+    }
+
+    .emergency-header {
+        padding: 12px 16px;
+    }
+
+    .header-title-mobile {
+        display: block;
+    }
+
+    .header-title-desktop {
+        display: none;
+    }
+
+    .card-title-text {
+        font-size: 14px;
+    }
+
+    .card-title-wrapper {
+        gap: 6px;
+    }
+
+    .card-title-wrapper .anticon {
+        font-size: 16px !important;
+    }
+
+    /* Card head responsive */
+    .hotline-card .ant-card-head,
+    .report-card .ant-card-head,
+    .rescue-requests-card .ant-card-head {
+        padding: 12px 16px;
+        min-height: 48px;
+    }
+
+    .hotline-card .ant-card-body,
+    .report-card .ant-card-body,
+    .rescue-requests-card .ant-card-body {
+        padding: 12px !important;
+    }
+
+    /* Alert responsive */
+    .ant-alert {
+        font-size: 13px;
+        padding: 10px 12px;
+    }
+
+    /* Form items */
+    .ant-form-item-label>label {
+        font-size: 13px !important;
+    }
+
+    .ant-input,
+    .ant-input-affix-wrapper {
+        font-size: 14px !important;
+    }
+
+    .ant-input::placeholder {
+        font-size: 13px !important;
+    }
+
+    /* Buttons */
+    .gps-button,
+    .map-select-button {
+        font-size: 12px !important;
+        padding: 6px 12px !important;
+        height: auto !important;
+    }
+
+    .location-tag {
+        font-size: 10px !important;
+        padding: 2px 6px !important;
+        margin: 0 !important;
+        display: block;
+        width: 100%;
+        margin-top: 8px !important;
+    }
+
+    /* Map selector */
+    .map-selector-card {
+        height: 250px;
+        margin-top: 12px;
+    }
+
+    /* Upload */
+    .ant-upload.ant-upload-drag {
+        padding: 16px !important;
+    }
+
+    .ant-upload.ant-upload-drag .ant-upload-drag-container {
+        font-size: 13px;
+    }
+
+    /* List items - Improved mobile design */
+    .rescue-item,
+    .rescue-item-urgent {
+        padding: 0 !important;
+        margin-bottom: 14px !important;
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+        border-radius: 12px !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08) !important;
+    }
+
+    .rescue-item-content {
+        padding: 14px 16px !important;
+    }
+
+    .rescue-item-header {
+        margin-bottom: 10px !important;
+    }
+
+    .rescue-item-description {
+        margin-bottom: 10px !important;
+    }
+
+    .rescue-item-location {
+        margin-bottom: 10px !important;
+    }
+
+    .rescue-item-info {
+        margin-bottom: 10px !important;
+        gap: 8px !important;
+    }
+
+    .rescue-item-actions {
+        margin-bottom: 6px !important;
+        padding-top: 10px !important;
+        gap: 6px !important;
+    }
+
+    .rescue-requests-card .ant-card-body {
+        padding: 12px !important;
+    }
+
+    .rescue-item .ant-list-item-meta-title .ant-tag,
+    .rescue-item-urgent .ant-list-item-meta-title .ant-tag {
+        font-size: 11px !important;
+        padding: 3px 8px !important;
+        margin-bottom: 6px !important;
+    }
+
+    .rescue-item .ant-list-item-meta-title .ant-typography,
+    .rescue-item-urgent .ant-list-item-meta-title .ant-typography {
+        font-size: 14px !important;
+        line-height: 1.4 !important;
+    }
+
+    .rescue-item .ant-list-item-meta-description .ant-typography,
+    .rescue-item-urgent .ant-list-item-meta-description .ant-typography {
+        font-size: 13px !important;
+        line-height: 1.5 !important;
+        margin-bottom: 10px !important;
+    }
+
+    .rescue-item-actions {
+        margin-top: 10px !important;
+        padding-top: 10px !important;
+        gap: 10px !important;
+    }
+
+    .rescue-item-info {
+        font-size: 12px !important;
+        gap: 6px !important;
+    }
+
+    .rescue-item-info .ant-typography {
+        font-size: 12px !important;
+    }
+
+    .rescue-item-info .ant-tag {
+        font-size: 11px !important;
+        padding: 2px 8px !important;
+    }
+
+    .rescue-item-buttons {
+        margin-top: 8px !important;
+        gap: 6px !important;
+    }
+
+    .phone-button {
+        font-size: 12px !important;
+        padding: 5px 12px !important;
+        height: 30px !important;
+    }
+
+    .map-link-button {
+        font-size: 12px !important;
+        padding: 4px 0 !important;
+    }
+
+    /* Image in list */
+    .rescue-item-image-wrapper {
+        height: 250px !important;
+        margin-top: 10px !important;
+    }
+
+    .rescue-item-image {
+        width: 100% !important;
+        height: 100% !important;
+        object-fit: cover !important;
+        border-radius: 10px !important;
+    }
+
+    /* Text responsive */
+
+    /* Submit button */
+    .ant-btn-lg {
+        height: 48px !important;
+        font-size: 15px !important;
+    }
+
+    /* Space responsive */
+    .ant-space {
+        gap: 8px !important;
+    }
+
+    .ant-space-vertical {
+        gap: 8px !important;
+    }
+}
+
+@media (max-width: 480px) {
+    .home-layout {
+        overflow-x: hidden;
+        width: 100vw;
+        max-width: 100vw;
+    }
+
+    .home-content {
+        padding: 8px;
+        width: 100%;
+        max-width: 100%;
+        overflow-x: hidden;
+        box-sizing: border-box;
+    }
+
+    .emergency-header {
+        padding: 10px 12px;
+        width: 100%;
+        max-width: 100vw;
+        overflow-x: hidden;
+        box-sizing: border-box;
+    }
+
+    .emergency-header {
+        padding: 10px 12px;
+    }
+
+    .header-title-mobile {
+        font-size: 16px !important;
+    }
+
+    .card-title-text {
+        font-size: 13px;
+    }
+
+    .hotline-card .ant-card-body,
+    .report-card .ant-card-body,
+    .rescue-requests-card .ant-card-body {
+        padding: 12px;
+    }
+
+    .map-selector-card {
+        height: 200px;
+    }
+
+    .gps-button,
+    .map-select-button {
+        font-size: 11px !important;
+        padding: 5px 10px !important;
+    }
+
+    .location-tag {
+        font-size: 9px !important;
+        padding: 2px 4px !important;
+    }
+
+    .ant-btn-lg {
+        height: 44px !important;
+        font-size: 14px !important;
+    }
+
+    .rescue-item-image-wrapper {
+        height: 200px !important;
+    }
+}

@@ -1,0 +1,371 @@
+/* Water Level Chart Styles */
+.water-level-modal .ant-modal-content {
+    border-radius: 12px;
+    overflow: hidden;
+    max-width: 100vw !important;
+}
+
+.water-level-modal .ant-modal-body {
+    padding: 16px !important;
+    max-height: calc(100vh - 100px);
+    overflow-y: auto;
+    overflow-x: hidden !important;
+    max-width: 100% !important;
+}
+
+.water-level-chart-container {
+    padding: 0;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow-x: hidden;
+}
+
+/* Header */
+.water-level-header {
+    margin-bottom: 16px;
+}
+
+.water-level-title-section {
+    text-align: center;
+    width: 100%;
+}
+
+.water-level-main-title {
+    margin-bottom: 6px !important;
+    color: #1890ff !important;
+    text-align: center;
+    font-size: 16px !important;
+}
+
+.water-level-station-name {
+    margin: 4px 0 !important;
+    color: #262626 !important;
+    font-weight: 600 !important;
+    font-size: 20px !important;
+    word-break: break-word;
+}
+
+.water-level-station-code {
+    font-size: 13px;
+    color: #8c8c8c;
+    word-break: break-word;
+}
+
+.water-level-chart-title {
+    text-align: center;
+    margin-bottom: 16px !important;
+    color: #1890ff !important;
+    font-weight: 600 !important;
+    font-size: 16px !important;
+}
+
+/* Statistics Cards */
+.water-level-stats {
+    margin-bottom: 20px;
+}
+
+.water-level-stat-card {
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    border-top: 3px solid #1890ff;
+    transition: all 0.3s;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.water-level-stat-card:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    transform: translateY(-2px);
+}
+
+.water-level-stat-card .ant-statistic-title {
+    font-size: 12px;
+    color: #8c8c8c;
+    font-weight: 500;
+    margin-bottom: 4px;
+}
+
+.water-level-stat-card .ant-statistic-content {
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+.water-level-stat-card .ant-statistic-content-value {
+    word-break: break-word;
+}
+
+/* Chart Wrapper */
+.water-level-chart-wrapper {
+    background: #fff;
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 16px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
+    position: relative;
+    display: block;
+}
+
+.water-level-chart-wrapper .recharts-wrapper {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100% !important;
+    position: relative !important;
+}
+
+.water-level-chart-wrapper .recharts-surface {
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow: visible !important;
+}
+
+.water-level-chart-wrapper svg {
+    width: 100% !important;
+    height: 100% !important;
+    max-width: 100% !important;
+    display: block !important;
+}
+
+.water-level-chart-wrapper .recharts-responsive-container {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+/* Footer */
+.water-level-footer {
+    text-align: center;
+    padding-top: 12px;
+    border-top: 1px solid #f0f0f0;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.water-level-update-info {
+    margin-top: 8px;
+    width: 100%;
+}
+
+.water-level-update-info .ant-btn {
+    width: 100%;
+    max-width: 100%;
+    white-space: normal;
+    word-break: break-word;
+    padding: 8px 12px;
+    font-size: 12px;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .water-level-modal {
+        width: 95% !important;
+        max-width: 95% !important;
+        margin: 10px auto !important;
+    }
+
+    .water-level-modal .ant-modal-content {
+        margin: 0;
+    }
+
+    .water-level-modal .ant-modal-body {
+        padding: 12px !important;
+        max-height: calc(100vh - 80px);
+        overflow-x: hidden !important;
+        max-width: 100% !important;
+    }
+
+    .water-level-chart-container {
+        padding: 0;
+        width: 100%;
+        max-width: 100%;
+        overflow-x: hidden;
+    }
+
+    .water-level-header {
+        margin-bottom: 12px;
+    }
+
+    .water-level-main-title {
+        font-size: 14px !important;
+        margin-bottom: 4px !important;
+    }
+
+
+    .water-level-station-name {
+        font-size: 18px !important;
+        margin: 2px 0 !important;
+    }
+
+    .water-level-station-code {
+        font-size: 11px;
+    }
+
+    .water-level-chart-title {
+        font-size: 14px !important;
+        margin-bottom: 12px !important;
+    }
+
+    .water-level-stats {
+        margin-bottom: 16px;
+    }
+
+    .water-level-stats .ant-row {
+        margin-left: -8px !important;
+        margin-right: -8px !important;
+    }
+
+    .water-level-stats .ant-col {
+        padding-left: 8px !important;
+        padding-right: 8px !important;
+    }
+
+    .water-level-stat-card {
+        padding: 12px !important;
+    }
+
+    .water-level-stat-card .ant-statistic-title {
+        font-size: 11px;
+        margin-bottom: 2px;
+    }
+
+    .water-level-stat-card .ant-statistic-content {
+        font-size: 18px;
+    }
+
+    .water-level-chart-wrapper {
+        padding: 8px 4px;
+        margin-bottom: 12px;
+        height: 250px !important;
+        min-height: 250px !important;
+        max-height: 250px !important;
+        max-width: 100% !important;
+        overflow: hidden !important;
+    }
+
+    .water-level-chart-wrapper .recharts-responsive-container {
+        width: 100% !important;
+        height: 100% !important;
+        min-height: 250px !important;
+    }
+
+    .water-level-chart-wrapper .recharts-wrapper {
+        width: 100% !important;
+        height: 100% !important;
+        min-height: 250px !important;
+    }
+
+    .water-level-chart-wrapper svg {
+        width: 100% !important;
+        height: 100% !important;
+        min-height: 250px !important;
+        display: block !important;
+    }
+
+    .water-level-footer {
+        padding-top: 10px;
+    }
+
+    .water-level-update-info .ant-btn {
+        font-size: 11px;
+        padding: 6px 10px;
+    }
+}
+
+@media (max-width: 480px) {
+    .water-level-modal {
+        width: 98% !important;
+        max-width: 98% !important;
+        margin: 5px auto !important;
+        top: 5px !important;
+    }
+
+    .water-level-modal .ant-modal-body {
+        padding: 10px !important;
+        max-height: calc(100vh - 60px);
+        overflow-x: hidden !important;
+        max-width: 100% !important;
+    }
+
+    .water-level-main-title {
+        font-size: 13px !important;
+    }
+
+    .water-level-station-name {
+        font-size: 16px !important;
+    }
+
+    .water-level-station-code {
+        font-size: 10px;
+    }
+
+    .water-level-chart-title {
+        font-size: 13px !important;
+        margin-bottom: 10px !important;
+    }
+
+    .water-level-stats .ant-row {
+        margin-left: -4px !important;
+        margin-right: -4px !important;
+    }
+
+    .water-level-stats .ant-col {
+        padding-left: 4px !important;
+        padding-right: 4px !important;
+        margin-bottom: 8px;
+    }
+
+    .water-level-stat-card {
+        padding: 10px !important;
+    }
+
+    .water-level-stat-card .ant-statistic-title {
+        font-size: 10px;
+    }
+
+    .water-level-stat-card .ant-statistic-content {
+        font-size: 16px;
+    }
+
+    .water-level-chart-wrapper {
+        padding: 6px 4px;
+        margin-bottom: 10px;
+        height: 250px !important;
+        min-height: 250px !important;
+        max-height: 250px !important;
+        max-width: 100% !important;
+        overflow: hidden !important;
+    }
+
+    .water-level-chart-wrapper .recharts-responsive-container {
+        width: 100% !important;
+        height: 100% !important;
+        min-height: 250px !important;
+    }
+
+    .water-level-chart-wrapper .recharts-wrapper {
+        width: 100% !important;
+        height: 100% !important;
+        min-height: 250px !important;
+    }
+
+    .water-level-chart-wrapper svg {
+        width: 100% !important;
+        height: 100% !important;
+        min-height: 250px !important;
+        display: block !important;
+    }
+
+    .water-level-footer {
+        padding-top: 8px;
+    }
+
+    .water-level-update-info .ant-btn {
+        font-size: 10px;
+        padding: 5px 8px;
+    }
+}
+

@@ -1,0 +1,19 @@
+.ai-report-card {
+  margin-bottom: 24px;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.ai-report-card .ant-card-head {
+  background-color: #fef2f2;
+  border-bottom: 2px solid #dc2626;
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  .ai-report-card {
+    margin-bottom: 16px;
+  }
+}
+
+

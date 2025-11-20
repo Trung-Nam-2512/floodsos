@@ -1,0 +1,20 @@
+.admin-dashboard {
+  min-height: 100vh;
+  background: #f0f2f5;
+}
+
+.ant-statistic-title {
+  font-weight: 600;
+}
+
+.ant-table-cell {
+  vertical-align: middle !important;
+}
+
+@media (max-width: 768px) {
+  .ant-statistic {
+    text-align: center;
+  }
+}
+
+
