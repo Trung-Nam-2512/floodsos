@@ -50,8 +50,8 @@ function MapPage() {
     const [sidebarOpen, setSidebarOpen] = useState(false) // Mobile sidebar state
     const [isMobile, setIsMobile] = useState(window.innerWidth <= 768)
     const [viewState, setViewState] = useState({
-        longitude: 108.05,
-        latitude: 12.67,
+        longitude: 108.9, // Phú Yên
+        latitude: 13.0,  // Phú Yên
         zoom: 9
     })
     const [editingRequest, setEditingRequest] = useState(null) // Request đang được edit tọa độ
@@ -72,8 +72,8 @@ function MapPage() {
     const [locationPickerModalVisible, setLocationPickerModalVisible] = useState(false)
     const [locationPickerMapType, setLocationPickerMapType] = useState('streets') // 'streets' or 'satellite'
     const [locationPickerViewState, setLocationPickerViewState] = useState({
-        longitude: 108.05,
-        latitude: 12.67,
+        longitude: 108.9, // Phú Yên
+        latitude: 13.0,  // Phú Yên
         zoom: 14
     })
     const [locationPickerSelected, setLocationPickerSelected] = useState(null) // { lat, lng }
@@ -161,9 +161,8 @@ function MapPage() {
         const fetchThuydienData = async () => {
             try {
                 const response = await axios.get(`${API_URL}/api/thuydien/latest`)
-                console.log('📊 Thuỷ điện API response:', response.data)
+                // console.log('📊 Thuỷ điện API response:', response.data)
                 if (response.data && response.data.success && response.data.data) {
-                    console.log('✅ Thuỷ điện data:', response.data.data)
                     setThuydienData(response.data.data)
                 } else {
                     console.warn('⚠️ Thuỷ điện API không trả về dữ liệu hợp lệ:', response.data)
@@ -228,11 +227,11 @@ function MapPage() {
 
     // Debug: Log thuydienData khi thay đổi
     useEffect(() => {
-        console.log('🔄 thuydienData đã thay đổi:', thuydienData)
-        console.log('🔄 Số lượng reservoirs:', Object.keys(thuydienData).length)
-        Object.entries(thuydienData).forEach(([key, value]) => {
-            console.log(`  - ${key}:`, value)
-        })
+        // console.log('🔄 thuydienData đã thay đổi:', thuydienData)
+        // console.log('🔄 Số lượng reservoirs:', Object.keys(thuydienData).length)
+        // Object.entries(thuydienData).forEach(([key, value]) => {
+        //     console.log(`  - ${key}:`, value)
+        // })
     }, [thuydienData])
 
     // Xử lý click marker
@@ -834,7 +833,7 @@ function MapPage() {
         setUpdateError(null)
 
         try {
-            console.log('📤 Đang cập nhật tọa độ:', { requestId, coords })
+            // console.log('📤 Đang cập nhật tọa độ:', { requestId, coords })
             const response = await axios.put(
                 `${API_URL}/api/rescue-requests/${requestId}/coords`,
                 { coords }
@@ -903,14 +902,14 @@ function MapPage() {
 
     // Handler submit form thêm đội cứu hộ
     const handleAddRescueTeamSubmit = async (values) => {
-        console.log('🔵 handleAddRescueTeamSubmit called', values)
-        console.log('🔵 addRescueTeamLocation:', addRescueTeamLocation)
+        // console.log('🔵 handleAddRescueTeamSubmit called', values)
+        // console.log('🔵 addRescueTeamLocation:', addRescueTeamLocation)
         try {
             setAddRescueTeamLoading(true)
 
             // Validate location
             if (!addRescueTeamLocation || !addRescueTeamLocation.lat || !addRescueTeamLocation.lng) {
-                console.log('❌ Location validation failed')
+                // console.log('❌ Location validation failed')
                 message.error('Vui lòng chọn vị trí trên bản đồ hoặc dùng GPS tự động!')
                 setAddRescueTeamLoading(false)
                 return
@@ -918,15 +917,15 @@ function MapPage() {
 
             // Validate description
             if (!values.description || values.description.trim().length === 0) {
-                console.log('❌ Description validation failed')
+                // console.log('❌ Description validation failed')
                 message.error('Vui lòng nhập thông tin về đội cứu hộ!')
                 setAddRescueTeamLoading(false)
                 return
             }
 
-            console.log('✅ Validation passed, creating safe point data...')
+            // console.log('✅ Validation passed, creating safe point data...')
 
-            console.log('Validation passed, creating safe point data...')
+            // console.log('Validation passed, creating safe point data...')
 
             // Tạo safe point data
             const safePointData = {
@@ -1195,13 +1194,7 @@ function MapPage() {
                             />
                         ) : null}
                         <Title level={4} className="header-title">
-                            <Button
-                                type="text"
-                                icon={<HomeOutlined />}
-                                onClick={() => { window.location.href = '/' }}
-                            >
-                                <span>🚨 FloodSoS</span>
-                            </Button>
+                            <Button type="text" icon={<HomeOutlined />} onClick={() => navigate('/')}><span>🚨 FloodSoS</span></Button>
                         </Title>
                         {!isMobile && (
                             <div className="header-nav">
@@ -1970,8 +1963,8 @@ function MapPage() {
                                         ? Object.values(thuydienData)
                                         : fallbackReservoirs
 
-                                    console.log('🔍 Thuỷ điện data để render:', thuydienData)
-                                    console.log('🔍 Số lượng reservoirs:', reservoirs.length)
+                                    // console.log('🔍 Thuỷ điện data để render:', thuydienData)
+                                    // console.log('🔍 Số lượng reservoirs:', reservoirs.length)
 
                                     return reservoirs
                                         .filter(reservoir => {
@@ -1988,7 +1981,6 @@ function MapPage() {
                                                 console.warn('⚠️ Tọa độ không hợp lệ:', { lng, lat, reservoir })
                                                 return null
                                             }
-                                            console.log('✅ Rendering marker cho:', reservoir.name, 'tại', lat, lng)
                                             return (
                                                 <Marker
                                                     key={`thuydien-${reservoir.slug}`}
@@ -2690,10 +2682,10 @@ function MapPage() {
                                                         setLocationPickerSelected(null)
                                                     },
                                                     () => {
-                                                        // Nếu không lấy được GPS, dùng vị trí mặc định
+                                                        // Nếu không lấy được GPS, dùng vị trí mặc định (Phú Yên)
                                                         setLocationPickerViewState({
-                                                            longitude: 108.05,
-                                                            latitude: 12.67,
+                                                            longitude: 108.9, // Phú Yên
+                                                            latitude: 13.0,  // Phú Yên
                                                             zoom: 10
                                                         })
                                                         setLocationPickerSelected(null)
@@ -2701,8 +2693,8 @@ function MapPage() {
                                                 )
                                             } else {
                                                 setLocationPickerViewState({
-                                                    longitude: 108.05,
-                                                    latitude: 12.67,
+                                                    longitude: 108.9, // Phú Yên
+                                                    latitude: 13.0,  // Phú Yên
                                                     zoom: 10
                                                 })
                                                 setLocationPickerSelected(null)
@@ -2947,8 +2939,8 @@ function MapPage() {
                     layout="vertical"
                     onFinish={handleAddRescueTeamSubmit}
                     onFinishFailed={(errorInfo) => {
-                        console.log('❌ Form validation failed:', errorInfo)
-                        console.log('❌ Error fields:', errorInfo.errorFields)
+                        // console.log('❌ Form validation failed:', errorInfo)    
+                        // console.log('❌ Error fields:', errorInfo.errorFields)
                         message.error('Vui lòng điền đầy đủ thông tin bắt buộc!')
                     }}
                     autoComplete="off"
@@ -3092,9 +3084,9 @@ function MapPage() {
                                 loading={addRescueTeamLoading}
                                 icon={<PlusOutlined />}
                                 onClick={(e) => {
-                                    console.log('🔵 Submit button clicked')
-                                    console.log('🔵 Form values:', addRescueTeamForm.getFieldsValue())
-                                    console.log('🔵 Form errors:', addRescueTeamForm.getFieldsError())
+                                    // console.log('🔵 Submit button clicked')
+                                    // console.log('🔵 Form values:', addRescueTeamForm.getFieldsValue())
+                                    // console.log('🔵 Form errors:', addRescueTeamForm.getFieldsError())
                                     // Không prevent default - để form tự xử lý
                                 }}
                             >

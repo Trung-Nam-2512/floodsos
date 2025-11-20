@@ -1,6 +1,7 @@
 import RescueRequest from '../models/RescueRequest.model.js';
 import Report from '../models/Report.model.js';
 import aiService from '../services/ai.service.js';
+import duplicateCheckService from '../services/duplicateCheck.service.js';
 import { saveBase64Image } from '../config/upload.config.js';
 import logger from '../utils/logger.js';
 
@@ -96,6 +97,16 @@ class RescueRequestController {
                 }
             };
 
+            // Check duplicate trước khi lưu
+            console.log('🔍 Đang kiểm tra trùng lặp...');
+            const duplicateCheck = await duplicateCheckService.checkDuplicate(newRequestData);
+
+            if (duplicateCheck.isDuplicate) {
+                console.log('⚠️  Phát hiện request trùng lặp!');
+                console.log(`   Similarity: ${duplicateCheck.maxSimilarity * 100}%`);
+                console.log(`   Số lượng duplicate: ${duplicateCheck.duplicates.length}`);
+            }
+
             console.log(' Đang lưu vào database với coords:', newRequestData.coords);
             const newRequest = await RescueRequest.create(newRequestData);
             console.log(' Đã lưu thành công! Coords trong DB:', newRequest.coords);
@@ -105,8 +116,18 @@ class RescueRequestController {
 
             res.json({
                 success: true,
-                message: 'Đã xử lý cầu cứu thành công!',
-                data: newRequest
+                message: duplicateCheck.isDuplicate
+                    ? 'Đã xử lý cầu cứu thành công! (Có thể trùng lặp với request trước đó)'
+                    : 'Đã xử lý cầu cứu thành công!',
+                data: newRequest,
+                duplicateCheck: {
+                    isDuplicate: duplicateCheck.isDuplicate,
+                    maxSimilarity: duplicateCheck.maxSimilarity,
+                    duplicates: duplicateCheck.duplicates,
+                    warning: duplicateCheck.isDuplicate
+                        ? `Phát hiện ${duplicateCheck.duplicates.length} request tương tự (${Math.round(duplicateCheck.maxSimilarity * 100)}% giống nhau). Vui lòng kiểm tra lại.`
+                        : null
+                }
             });
 
         } catch (error) {
@@ -137,12 +158,60 @@ class RescueRequestController {
                 }
             };
 
+            // Check duplicate cho fallback request
+            const fallbackDuplicateCheck = await duplicateCheckService.checkDuplicate(fallbackRequestData);
+
             const fallbackRequest = await RescueRequest.create(fallbackRequestData);
 
             res.json({
                 success: true,
                 message: 'Đã lưu cầu cứu (cần xác minh thủ công)',
-                data: fallbackRequest
+                data: fallbackRequest,
+                duplicateCheck: {
+                    isDuplicate: fallbackDuplicateCheck.isDuplicate,
+                    maxSimilarity: fallbackDuplicateCheck.maxSimilarity,
+                    duplicates: fallbackDuplicateCheck.duplicates,
+                    warning: fallbackDuplicateCheck.isDuplicate
+                        ? `Phát hiện ${fallbackDuplicateCheck.duplicates.length} request tương tự (${Math.round(fallbackDuplicateCheck.maxSimilarity * 100)}% giống nhau). Vui lòng kiểm tra lại.`
+                        : null
+                }
+            });
+        }
+    }
+
+    /**
+     * Check duplicate trước khi submit (optional - để frontend check)
+     * POST /api/rescue-requests/check-duplicate
+     */
+    async checkDuplicate(req, res) {
+        try {
+            const { rawText, description, contact, contactFull, coords, facebookUrl, location } = req.body;
+
+            const requestData = {
+                rawText,
+                description,
+                contact,
+                contactFull,
+                coords,
+                facebookUrl,
+                location
+            };
+
+            const duplicateCheck = await duplicateCheckService.checkDuplicate(requestData);
+
+            res.json({
+                success: true,
+                ...duplicateCheck,
+                warning: duplicateCheck.isDuplicate
+                    ? `Phát hiện ${duplicateCheck.duplicates.length} request tương tự (${Math.round(duplicateCheck.maxSimilarity * 100)}% giống nhau). Bạn có chắc muốn tiếp tục?`
+                    : null
+            });
+        } catch (error) {
+            logger.error('Lỗi check duplicate', error, req);
+            res.status(500).json({
+                success: false,
+                message: 'Lỗi khi kiểm tra trùng lặp',
+                error: error.message
             });
         }
     }

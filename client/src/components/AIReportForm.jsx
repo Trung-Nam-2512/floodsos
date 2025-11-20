@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { Card, Form, Input, Upload, Button, message, Space, Typography, Alert } from 'antd'
-import { RobotOutlined, CameraOutlined, SendOutlined, LinkOutlined, GlobalOutlined } from '@ant-design/icons'
+import { Card, Form, Input, Upload, Button, message, Space, Typography, Alert, Modal, List } from 'antd'
+import { RobotOutlined, CameraOutlined, SendOutlined, LinkOutlined, GlobalOutlined, WarningOutlined } from '@ant-design/icons'
 import axios from 'axios'
 import './AIReportForm.css'
 
@@ -15,6 +15,9 @@ function AIReportForm({ onSuccess }) {
     const [previewText, setPreviewText] = useState('')
     const [imageFile, setImageFile] = useState(null)
     const [parsedCoords, setParsedCoords] = useState(null) // Tọa độ đã parse từ Google Maps link
+    const [duplicateCheck, setDuplicateCheck] = useState(null) // Kết quả check duplicate
+    const [showDuplicateModal, setShowDuplicateModal] = useState(false)
+    const [pendingSubmit, setPendingSubmit] = useState(null) // Lưu request data khi có duplicate
 
     // Parse tọa độ từ Google Maps URL
     const parseGoogleMapsCoords = (url) => {
@@ -92,7 +95,7 @@ function AIReportForm({ onSuccess }) {
 
     // Xử lý upload ảnh (hỗ trợ cả click và drag & drop)
     const handleImageChange = (info) => {
-        console.log('📸 handleImageChange called:', info);
+        // console.log('📸 handleImageChange called:', info);
 
         // Xử lý nhiều trường hợp: drag & drop, click, hoặc file list
         let file = null;
@@ -123,6 +126,79 @@ function AIReportForm({ onSuccess }) {
             if (info.fileList && info.fileList.length === 0) {
                 setImageFile(null);
             }
+        }
+    }
+
+    // Check duplicate trước khi submit
+    const checkDuplicate = async (requestData) => {
+        try {
+            const checkData = {
+                rawText: requestData.rawText,
+                description: requestData.rawText, // Dùng rawText làm description
+                contact: null, // Sẽ được parse từ AI
+                contactFull: null,
+                coords: requestData.coords,
+                facebookUrl: requestData.facebookUrl,
+                location: null // Sẽ được parse từ AI
+            }
+
+            const response = await axios.post(`${API_URL}/api/rescue-requests/check-duplicate`, checkData)
+            return response.data
+        } catch (error) {
+            console.error('Lỗi check duplicate:', error)
+            // Nếu lỗi, không block submit
+            return { isDuplicate: false, duplicates: [], maxSimilarity: 0 }
+        }
+    }
+
+    // Submit form thực sự (sau khi check duplicate)
+    const doSubmit = async (requestData) => {
+        try {
+            setLoading(true)
+
+            console.log('📤 Sending request to:', `${API_URL}/api/ai-report`);
+            console.log('📦 Request data:', {
+                rawText: requestData.rawText?.substring(0, 100) + '...',
+                facebookUrl: requestData.facebookUrl,
+                hasImage: !!requestData.imageBase64,
+                imageBase64Length: requestData.imageBase64 ? requestData.imageBase64.length : 0
+            });
+
+            const response = await axios.post(`${API_URL}/api/ai-report`, requestData)
+
+            if (response.data.success) {
+                // Hiển thị warning nếu có duplicate
+                if (response.data.duplicateCheck?.isDuplicate) {
+                    message.warning({
+                        content: response.data.duplicateCheck.warning,
+                        duration: 8
+                    })
+                } else {
+                    message.success('Đã thêm điểm cầu cứu! AI đã phân tích và lưu thông tin.')
+                }
+
+                form.resetFields()
+                setImageFile(null)
+                setPreviewText('')
+                setDuplicateCheck(null)
+                setShowDuplicateModal(false)
+
+                // Gọi callback để refresh danh sách và map
+                if (onSuccess) {
+                    onSuccess(response.data.data)
+                }
+            }
+        } catch (error) {
+            console.error('Lỗi gửi cầu cứu:', error)
+            if (error.response?.data?.message) {
+                message.error(error.response.data.message)
+            } else if (error.request) {
+                message.warning('Không thể kết nối server. Vui lòng gọi hotline trực tiếp!')
+            } else {
+                message.error('Có lỗi xảy ra. Vui lòng thử lại!')
+            }
+        } finally {
+            setLoading(false)
         }
     }
 
@@ -176,37 +252,33 @@ function AIReportForm({ onSuccess }) {
                 console.log('📍 Sử dụng tọa độ từ Google Maps:', parsedCoords);
             }
 
-            console.log('📤 Sending request to:', `${API_URL}/api/ai-report`);
-            console.log('📦 Request data:', {
-                rawText: requestData.rawText?.substring(0, 100) + '...',
-                facebookUrl: requestData.facebookUrl,
-                hasImage: !!imageBase64,
-                imageBase64Length: imageBase64 ? imageBase64.length : 0
-            });
+            // Check duplicate trước khi submit
+            console.log('🔍 Đang kiểm tra trùng lặp...')
+            const duplicateResult = await checkDuplicate(requestData)
 
-            try {
-                const response = await axios.post(`${API_URL}/api/ai-report`, requestData)
-
-                if (response.data.success) {
-                    message.success('Đã thêm điểm cầu cứu! AI đã phân tích và lưu thông tin.')
-                    form.resetFields()
-                    setImageFile(null)
-                    setPreviewText('')
-
-                    // Gọi callback để refresh danh sách và map
-                    if (onSuccess) {
-                        onSuccess(response.data.data)
-                    }
-                }
-            } catch (error) {
-                console.error('Lỗi gửi cầu cứu:', error)
-                // Nếu không có mạng, vẫn hiển thị thông báo
-                message.warning('Không thể kết nối server. Vui lòng gọi hotline trực tiếp!')
+            if (duplicateResult.isDuplicate && duplicateResult.duplicates.length > 0) {
+                // Có duplicate, hiển thị modal cảnh báo
+                setDuplicateCheck(duplicateResult)
+                setPendingSubmit(requestData)
+                setShowDuplicateModal(true)
+                setLoading(false)
+                return
             }
+
+            // Không có duplicate, submit ngay
+            await doSubmit(requestData)
         } catch (error) {
             message.error('Có lỗi xảy ra. Vui lòng thử lại!')
-        } finally {
             setLoading(false)
+        }
+    }
+
+    // Xác nhận submit dù có duplicate
+    const handleConfirmSubmit = async () => {
+        if (pendingSubmit) {
+            setShowDuplicateModal(false)
+            await doSubmit(pendingSubmit)
+            setPendingSubmit(null)
         }
     }
 
@@ -324,6 +396,80 @@ function AIReportForm({ onSuccess }) {
                     AI sẽ tự động trích xuất: vị trí, số người, độ khẩn cấp, nhu cầu, số điện thoại
                 </Text>
             </Form>
+
+            {/* Duplicate Warning Modal */}
+            <Modal
+                title={
+                    <Space>
+                        <WarningOutlined style={{ color: '#faad14' }} />
+                        <span>Phát hiện cầu cứu tương tự</span>
+                    </Space>
+                }
+                open={showDuplicateModal}
+                onOk={handleConfirmSubmit}
+                onCancel={() => {
+                    setShowDuplicateModal(false)
+                    setPendingSubmit(null)
+                    setDuplicateCheck(null)
+                }}
+                okText="Vẫn gửi"
+                cancelText="Hủy"
+                width={600}
+                okButtonProps={{ danger: true }}
+            >
+                <Alert
+                    message={`Phát hiện ${duplicateCheck?.duplicates.length || 0} cầu cứu tương tự (${Math.round((duplicateCheck?.maxSimilarity || 0) * 100)}% giống nhau)`}
+                    description="Có thể bạn đã gửi cầu cứu này trước đó. Vui lòng kiểm tra danh sách bên dưới trước khi tiếp tục."
+                    type="warning"
+                    showIcon
+                    style={{ marginBottom: 16 }}
+                />
+
+                {duplicateCheck?.duplicates && duplicateCheck.duplicates.length > 0 && (
+                    <List
+                        size="small"
+                        dataSource={duplicateCheck.duplicates}
+                        renderItem={(item, index) => (
+                            <List.Item>
+                                <Space direction="vertical" style={{ width: '100%' }}>
+                                    <Text strong>
+                                        #{index + 1} - Tương đồng: {Math.round(item.similarity * 100)}%
+                                    </Text>
+                                    <div>
+                                        {item.matchReasons.map((reason, idx) => (
+                                            <Text key={idx} type="secondary" style={{ fontSize: '12px', display: 'block' }}>
+                                                • {reason}
+                                            </Text>
+                                        ))}
+                                    </div>
+                                    {item.data.location && (
+                                        <Text type="secondary" style={{ fontSize: '12px' }}>
+                                            📍 {item.data.location}
+                                        </Text>
+                                    )}
+                                    {item.data.description && (
+                                        <Text type="secondary" style={{ fontSize: '12px', display: 'block' }}>
+                                            {item.data.description.substring(0, 100)}...
+                                        </Text>
+                                    )}
+                                    {item.data.contact && (
+                                        <Text type="secondary" style={{ fontSize: '12px' }}>
+                                            📞 {item.data.contact}
+                                        </Text>
+                                    )}
+                                    <Text type="secondary" style={{ fontSize: '11px' }}>
+                                        Tạo lúc: {new Date(item.data.createdAt).toLocaleString('vi-VN')}
+                                    </Text>
+                                </Space>
+                            </List.Item>
+                        )}
+                    />
+                )}
+
+                <Text type="secondary" style={{ fontSize: '12px', display: 'block', marginTop: 16 }}>
+                    Nếu đây là cầu cứu mới (khác với các cầu cứu trên), bạn có thể tiếp tục gửi.
+                </Text>
+            </Modal>
         </Card>
     )
 }

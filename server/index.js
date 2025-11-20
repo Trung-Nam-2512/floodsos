@@ -100,13 +100,41 @@ const PORT = process.env.PORT || 5000;
 // ====================
 // MIDDLEWARE
 // ====================
-// CORS configuration - Production ready
-app.use(cors({
-    origin: process.env.FRONTEND_URL || '*', // Cho phép tất cả trong dev, restrict trong production
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
-}));
+// CORS configuration - Dev: tắt CORS, Production: restrict
+const isDevelopment = process.env.NODE_ENV !== 'production';
+
+if (isDevelopment) {
+    // Dev mode: Tắt CORS hoàn toàn (cho phép tất cả origins)
+    console.log('🔓 Dev mode: CORS đã được tắt (cho phép tất cả origins)');
+    app.use(cors({
+        origin: true, // Cho phép tất cả origins
+        credentials: true,
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+    }));
+} else {
+    // Production mode: Chỉ cho phép FRONTEND_URL
+    const allowedOrigins = process.env.FRONTEND_URL
+        ? process.env.FRONTEND_URL.split(',').map(url => url.trim())
+        : ['https://wrs.edu.vn'];
+
+    console.log('🔒 Production mode: CORS chỉ cho phép:', allowedOrigins);
+    app.use(cors({
+        origin: (origin, callback) => {
+            // Cho phép requests không có origin (mobile apps, Postman, etc.)
+            if (!origin) return callback(null, true);
+
+            if (allowedOrigins.includes(origin)) {
+                callback(null, true);
+            } else {
+                callback(new Error('Not allowed by CORS'));
+            }
+        },
+        credentials: true,
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+    }));
+}
 
 // Security headers
 app.use((req, res, next) => {

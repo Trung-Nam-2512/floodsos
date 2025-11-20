@@ -4,6 +4,13 @@ import rescueRequestController from '../controllers/rescueRequest.controller.js'
 const router = express.Router();
 
 /**
+ * @route   POST /api/rescue-requests/check-duplicate
+ * @desc    Kiểm tra trùng lặp trước khi submit
+ * @access  Public
+ */
+router.post('/check-duplicate', rescueRequestController.checkDuplicate);
+
+/**
  * @route   POST /api/ai-report
  * @desc    Tạo yêu cầu cứu hộ bằng AI
  * @access  Public

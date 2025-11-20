@@ -54,7 +54,7 @@ function HomePage() {
                     setHotlines(response.data.data)
                 }
             } catch (error) {
-                console.log('Không thể kết nối API, sử dụng dữ liệu offline')
+                // console.log('Không thể kết nối API, sử dụng dữ liệu offline')
                 // Giữ nguyên fallback data
             }
         }
@@ -70,7 +70,7 @@ function HomePage() {
                 setRescueRequests(response.data.data)
             }
         } catch (error) {
-            console.log('Không thể tải danh sách cầu cứu')
+            // console.log('Không thể tải danh sách cầu cứu')
             setRescueRequests([])
         } finally {
             setLoadingRescue(false)
@@ -176,7 +176,7 @@ function HomePage() {
 
     // Xử lý upload ảnh (hỗ trợ cả click và drag & drop)
     const handleImageChange = (info) => {
-        console.log('📸 handleImageChange called:', info)
+        // console.log('📸 handleImageChange called:', info)       
 
         // Xử lý nhiều trường hợp: drag & drop, click, hoặc file list
         let file = null
@@ -198,7 +198,7 @@ function HomePage() {
         }
 
         if (file && file instanceof File) {
-            console.log('✅ File detected:', file.name, file.size, 'bytes')
+            // console.log('✅ File detected:', file.name, file.size, 'bytes')
             setImageFile(file)
             message.success(`Đã chọn ảnh: ${file.name}`)
         } else {
@@ -208,9 +208,9 @@ function HomePage() {
 
     // Submit form báo cáo
     const handleSubmit = async (values) => {
-        console.log('🚀 handleSubmit called with values:', values)
-        console.log('📸 imageFile:', imageFile)
-        console.log('📍 location:', location)
+        // console.log('🚀 handleSubmit called with values:', values)  
+        // console.log('📸 imageFile:', imageFile)
+        // console.log('📍 location:', location)
 
         try {
             setLoading(true)
@@ -225,12 +225,12 @@ function HomePage() {
             // Convert ảnh sang base64 nếu có
             let imageBase64 = null
             if (imageFile) {
-                console.log('📸 Converting image to base64...')
+                // console.log('📸 Converting image to base64...')
                 try {
                     imageBase64 = await new Promise((resolve, reject) => {
                         const reader = new FileReader()
                         reader.onloadend = () => {
-                            console.log('✅ Image converted, size:', reader.result.length, 'bytes')
+                            // console.log('✅ Image converted, size:', reader.result.length, 'bytes')
                             resolve(reader.result)
                         }
                         reader.onerror = (error) => {
@@ -255,11 +255,11 @@ function HomePage() {
                 name: values.name || ''
             }
 
-            console.log('📤 Sending request to:', `${API_URL}/api/report`)
-            console.log('📦 Request data:', {
-                ...reportData,
-                imageBase64: imageBase64 ? `${imageBase64.substring(0, 50)}...` : null
-            })
+            // console.log('📤 Sending request to:', `${API_URL}/api/report`)
+            // console.log('📦 Request data:', {
+            //     ...reportData,
+            //     imageBase64: imageBase64 ? `${imageBase64.substring(0, 50)}...` : null
+            // })
 
             try {
                 const response = await axios.post(`${API_URL}/api/report`, reportData, {
@@ -269,7 +269,7 @@ function HomePage() {
                     }
                 })
 
-                console.log('✅ Response received:', response.data)
+                // console.log('✅ Response received:', response.data)
                 message.success('Đã gửi thành công báo cáo khẩn cấp!')
                 form.resetFields()
                 setLocation(null)
