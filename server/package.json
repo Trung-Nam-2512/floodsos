@@ -10,6 +10,7 @@
     "seed": "node scripts/seedData.js"
   },
   "dependencies": {
+    "@mapbox/mapbox-gl-draw": "^1.5.1",
     "axios": "^1.13.2",
     "cheerio": "^1.1.2",
     "cloudinary": "^2.8.0",

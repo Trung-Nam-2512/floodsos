@@ -7,6 +7,11 @@ import rescueRequestRoutes from './rescueRequest.routes.js';
 import adminRoutes from './admin.routes.js';
 import geocodingRoutes from './geocoding.routes.js';
 import thuydienRoutes from './thuydien.routes.js';
+import newsRoutes from './news.routes.js';
+import radarRoutes from './radar.routes.js';
+import geoFeatureRoutes from './geoFeature.routes.js';
+import supportRequestRoutes from './supportRequest.routes.js';
+import reliefPointRoutes from './reliefPoint.routes.js';
 
 const router = express.Router();
 
@@ -23,6 +28,11 @@ router.use('/rescue-requests', rescueRequestRoutes);
 router.use('/admin', adminRoutes);
 router.use('/geocoding', geocodingRoutes);
 router.use('/thuydien', thuydienRoutes);
+router.use('/news', newsRoutes);
+router.use('/radar', radarRoutes);
+router.use('/geo-features', geoFeatureRoutes);
+router.use('/support-requests', supportRequestRoutes);
+router.use('/relief-points', reliefPointRoutes);
 
 /**
  * Health check

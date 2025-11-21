@@ -1,5 +1,21 @@
 import express from 'express';
-import reportController from '../controllers/report.controller.js';
+import { ReportController } from '../controllers/report.controller.js';
+
+// Khởi tạo controller instance
+const reportController = new ReportController();
+
+// Validate
+if (!reportController || typeof reportController.create !== 'function') {
+    console.error('❌ ReportController không được khởi tạo đúng!');
+    console.error('   reportController:', reportController);
+    console.error('   Type:', typeof reportController);
+    throw new Error('ReportController không được khởi tạo đúng');
+}
+
+console.log('✅ ReportController đã được khởi tạo thành công');
+console.log('   Type:', typeof reportController);
+console.log('   Has create:', typeof reportController.create);
+console.log('   Has getAll:', typeof reportController.getAll);
 
 const router = express.Router();
 
@@ -8,14 +24,58 @@ const router = express.Router();
  * @desc    Tạo báo cáo khẩn cấp mới
  * @access  Public
  */
-router.post('/', reportController.create);
+router.post('/', async (req, res) => {
+    try {
+        if (!reportController || typeof reportController.create !== 'function') {
+            console.error('❌ reportController.create is not a function!');
+            console.error('   reportController:', reportController);
+            console.error('   typeof reportController:', typeof reportController);
+            return res.status(500).json({
+                success: false,
+                message: 'Controller không được khởi tạo đúng',
+                error: 'reportController.create is not a function'
+            });
+        }
+        await reportController.create(req, res);
+    } catch (error) {
+        console.error('Error in report route:', error);
+        if (!res.headersSent) {
+            res.status(500).json({
+                success: false,
+                message: 'Lỗi server',
+                error: error.message
+            });
+        }
+    }
+});
 
 /**
  * @route   GET /api/reports
  * @desc    Lấy danh sách báo cáo
  * @access  Public
  */
-router.get('/', reportController.getAll);
+router.get('/', async (req, res) => {
+    try {
+        if (!reportController || typeof reportController.getAll !== 'function') {
+            console.error('❌ reportController.getAll is not a function!');
+            return res.status(500).json({
+                success: false,
+                message: 'Controller không được khởi tạo đúng',
+                error: 'reportController.getAll is not a function'
+            });
+        }
+        await reportController.getAll(req, res);
+    } catch (error) {
+        console.error('Error in report route:', error);
+        if (!res.headersSent) {
+            res.status(500).json({
+                success: false,
+                message: 'Lỗi server',
+                error: error.message
+            });
+        }
+    }
+});
 
 /**
  * @route   GET /api/reports/count

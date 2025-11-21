@@ -22,6 +22,7 @@ RUN npm config set fetch-retries 5 && \
 COPY client/package*.json ./
 
 # Install dependencies với retry logic
+# Dùng npm install thay vì npm ci để tự động cài packages từ package.json
 RUN set -e; \
     for i in 1 2 3; do \
     echo "Attempt $i: Installing dependencies..."; \
@@ -47,6 +48,7 @@ RUN echo 'server { \
     server_name _; \
     root /usr/share/nginx/html; \
     index index.html; \
+    client_max_body_size 10m; \
     location / { \
     try_files $uri $uri/ /index.html; \
     } \

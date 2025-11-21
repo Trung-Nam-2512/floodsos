@@ -181,36 +181,36 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Rate limiting - Bảo vệ API khỏi abuse
-const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 phút
-    max: 400, // Tối đa 400 requests mỗi IP trong 15 phút
-    message: {
-        success: false,
-        message: 'Quá nhiều requests từ IP này, vui lòng thử lại sau 15 phút.'
-    },
-    standardHeaders: true, // Trả về rate limit info trong headers (RateLimit-*)
-    legacyHeaders: false, // Không dùng X-RateLimit-* headers
-    // Trust proxy đã được set ở app level (trust proxy: 1)
-    // Tắt validation warning vì đã cấu hình đúng (chỉ trust 1 hop)
-    validate: {
-        trustProxy: false // Tắt validation vì đã cấu hình đúng ở app level
-    },
-    skip: (req) => {
-        // Skip rate limiting cho health check endpoint
-        return req.path === '/api/health';
-    },
-    handler: (req, res) => {
-        res.status(429).json({
-            success: false,
-            message: 'Quá nhiều requests từ IP này, vui lòng thử lại sau 15 phút.',
-            retryAfter: Math.ceil(15 * 60) // seconds
-        });
-    }
-});
+// Rate limiting - ĐÃ TẮT (server mạnh, không cần limit)
+// const limiter = rateLimit({
+//     windowMs: 15 * 60 * 1000, // 15 phút
+//     max: 400, // Tối đa 400 requests mỗi IP trong 15 phút
+//     message: {
+//         success: false,
+//         message: 'Quá nhiều requests từ IP này, vui lòng thử lại sau 15 phút.'
+//     },
+//     standardHeaders: true, // Trả về rate limit info trong headers (RateLimit-*)
+//     legacyHeaders: false, // Không dùng X-RateLimit-* headers
+//     // Trust proxy đã được set ở app level (trust proxy: 1)
+//     // Tắt validation warning vì đã cấu hình đúng (chỉ trust 1 hop)
+//     validate: {
+//         trustProxy: false // Tắt validation vì đã cấu hình đúng ở app level
+//     },
+//     skip: (req) => {
+//         // Skip rate limiting cho health check endpoint
+//         return req.path === '/api/health';
+//     },
+//     handler: (req, res) => {
+//         res.status(429).json({
+//             success: false,
+//             message: 'Quá nhiều requests từ IP này, vui lòng thử lại sau 15 phút.',
+//             retryAfter: Math.ceil(15 * 60) // seconds
+//         });
+//     }
+// });
 
 // Áp dụng rate limiting cho tất cả API routes (trừ health check)
-app.use('/api/', limiter);
+// app.use('/api/', limiter);
 
 // Serve static files (hình ảnh)
 app.use('/uploads', express.static('uploads'));

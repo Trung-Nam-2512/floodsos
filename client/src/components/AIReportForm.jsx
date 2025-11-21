@@ -1,7 +1,11 @@
 import { useState } from 'react'
 import { Card, Form, Input, Upload, Button, message, Space, Typography, Alert, Modal, List } from 'antd'
-import { RobotOutlined, CameraOutlined, SendOutlined, LinkOutlined, GlobalOutlined, WarningOutlined } from '@ant-design/icons'
+import { RobotOutlined, CameraOutlined, SendOutlined, LinkOutlined, GlobalOutlined, WarningOutlined, AimOutlined } from '@ant-design/icons'
+import Map, { Marker } from 'react-map-gl'
+import 'mapbox-gl/dist/mapbox-gl.css'
 import axios from 'axios'
+import { resizeImageForUpload } from '../utils/imageResize'
+import { parseAndConvertGoogleMapsCoords } from '../utils/coordinateTransform'
 import './AIReportForm.css'
 
 const { TextArea } = Input
@@ -10,73 +14,27 @@ const { Title, Text } = Typography
 // Trong production (Docker), VITE_API_URL có thể là empty để dùng relative path /api (nginx proxy)
 // Trong development, dùng localhost:5000
 const API_URL = import.meta.env.VITE_API_URL || import.meta.env.REACT_APP_API_URL || (import.meta.env.MODE === 'production' ? '' : 'http://localhost:5000')
+const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN || import.meta.env.REACT_APP_MAPBOX_TOKEN || ''
 
 function AIReportForm({ onSuccess }) {
     const [form] = Form.useForm()
     const [loading, setLoading] = useState(false)
     const [previewText, setPreviewText] = useState('')
     const [imageFile, setImageFile] = useState(null)
-    const [parsedCoords, setParsedCoords] = useState(null) // Tọa độ đã parse từ Google Maps link
+    const [parsedCoords, setParsedCoords] = useState(null) // Tọa độ đã parse từ Google Maps link [lng, lat]
     const [duplicateCheck, setDuplicateCheck] = useState(null) // Kết quả check duplicate
     const [showDuplicateModal, setShowDuplicateModal] = useState(false)
     const [pendingSubmit, setPendingSubmit] = useState(null) // Lưu request data khi có duplicate
+    const [mapViewState, setMapViewState] = useState({
+        longitude: 109.05,
+        latitude: 13.08,
+        zoom: 10
+    })
+    const [showMap, setShowMap] = useState(false)
 
-    // Parse tọa độ từ Google Maps URL
+    // Parse tọa độ từ Google Maps URL (tự động chuyển đổi GCJ-02 → WGS84)
     const parseGoogleMapsCoords = (url) => {
-        if (!url || typeof url !== 'string') return null
-
-        try {
-            // Format 1: https://www.google.com/maps?q=lat,lng
-            let match = url.match(/[?&]q=([^&]+)/)
-            if (match) {
-                const coords = match[1].split(',')
-                if (coords.length >= 2) {
-                    const lat = parseFloat(coords[0].trim())
-                    const lng = parseFloat(coords[1].trim())
-                    if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-                        return [lng, lat] // Trả về [longitude, latitude] theo format của hệ thống
-                    }
-                }
-            }
-
-            // Format 2: https://www.google.com/maps/@lat,lng,zoom
-            match = url.match(/@(-?\d+\.?\d*),(-?\d+\.?\d*)/)
-            if (match) {
-                const lat = parseFloat(match[1])
-                const lng = parseFloat(match[2])
-                if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-                    return [lng, lat]
-                }
-            }
-
-            // Format 3: https://maps.google.com/?q=lat,lng
-            match = url.match(/[?&]q=([^&]+)/)
-            if (match) {
-                const coords = match[1].split(',')
-                if (coords.length >= 2) {
-                    const lat = parseFloat(coords[0].trim())
-                    const lng = parseFloat(coords[1].trim())
-                    if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-                        return [lng, lat]
-                    }
-                }
-            }
-
-            // Format 4: https://www.google.com/maps/place/.../@lat,lng,zoom
-            match = url.match(/\/place\/[^@]+@(-?\d+\.?\d*),(-?\d+\.?\d*)/)
-            if (match) {
-                const lat = parseFloat(match[1])
-                const lng = parseFloat(match[2])
-                if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-                    return [lng, lat]
-                }
-            }
-
-            return null
-        } catch (error) {
-            console.error('Lỗi parse Google Maps URL:', error)
-            return null
-        }
+        return parseAndConvertGoogleMapsCoords(url, { outputFormat: 'lnglat' });
     }
 
     // Xử lý khi Google Maps link thay đổi
@@ -86,6 +44,13 @@ function AIReportForm({ onSuccess }) {
             const coords = parseGoogleMapsCoords(url)
             if (coords) {
                 setParsedCoords(coords)
+                // Cập nhật map view để hiển thị vị trí
+                setMapViewState({
+                    longitude: coords[0], // lng
+                    latitude: coords[1], // lat
+                    zoom: 14
+                })
+                setShowMap(true) // Tự động hiển thị map để user xác nhận
                 message.success(`✅ Đã tìm thấy tọa độ: ${coords[1].toFixed(6)}, ${coords[0].toFixed(6)}`)
             } else {
                 setParsedCoords(null)
@@ -93,6 +58,14 @@ function AIReportForm({ onSuccess }) {
         } else {
             setParsedCoords(null)
         }
+    }
+
+    // Xử lý click trên map để điều chỉnh tọa độ
+    const handleMapClick = (event) => {
+        const { lng, lat } = event.lngLat
+        const newCoords = [lng, lat] // [longitude, latitude]
+        setParsedCoords(newCoords)
+        message.success(`✅ Đã cập nhật tọa độ: ${lat.toFixed(6)}, ${lng.toFixed(6)}`)
     }
 
     // Xử lý upload ảnh (hỗ trợ cả click và drag & drop)
@@ -184,6 +157,8 @@ function AIReportForm({ onSuccess }) {
                 setPreviewText('')
                 setDuplicateCheck(null)
                 setShowDuplicateModal(false)
+                setParsedCoords(null)
+                setShowMap(false)
 
                 // Gọi callback để refresh danh sách và map
                 if (onSuccess) {
@@ -215,31 +190,29 @@ function AIReportForm({ onSuccess }) {
         try {
             setLoading(true)
 
-            // Convert ảnh sang base64 nếu có
+            // Resize và convert ảnh sang base64 nếu có
             let imageBase64 = null
             if (imageFile) {
-                // console.log('📸 Converting image to base64...');
-                // console.log('   File name:', imageFile.name);   
-                // console.log('   File size:', imageFile.size, 'bytes');
                 try {
-                    imageBase64 = await new Promise((resolve, reject) => {
-                        const reader = new FileReader()
-                        reader.onloadend = () => {
-                            // console.log('✅ Image converted, size:', reader.result.length, 'bytes');    
-                            resolve(reader.result)
-                        }
-                        reader.onerror = (error) => {
-                            console.error('❌ Error reading file:', error);
-                            reject(error)
-                        }
-                        reader.readAsDataURL(imageFile)
-                    })
+                    // Hiển thị thông báo đang xử lý ảnh
+                    const processingMessage = message.loading('Đang xử lý và nén ảnh...', 0);
+
+                    // Resize ảnh trước khi convert (giảm kích thước, tăng tốc độ upload)
+                    imageBase64 = await resizeImageForUpload(imageFile);
+
+                    // Đóng message loading
+                    processingMessage();
+
+                    const originalSizeMB = (imageFile.size / 1024 / 1024).toFixed(2);
+                    const compressedSizeMB = ((imageBase64.length * 3) / 4 / 1024 / 1024).toFixed(2);
+
+                    if (parseFloat(compressedSizeMB) < parseFloat(originalSizeMB) * 0.8) {
+                        message.success(`✅ Đã tối ưu ảnh: ${originalSizeMB}MB → ${compressedSizeMB}MB`);
+                    }
                 } catch (imgError) {
-                    console.error('❌ Lỗi convert ảnh:', imgError);
+                    console.error('❌ Lỗi xử lý ảnh:', imgError);
                     message.warning('Không thể xử lý ảnh, sẽ gửi không có ảnh');
                 }
-            } else {
-                // console.log('ℹ️  Không có ảnh');
             }
 
             const requestData = {
@@ -333,14 +306,97 @@ function AIReportForm({ onSuccess }) {
                 </Form.Item>
 
                 {parsedCoords && (
-                    <Alert
-                        message={`✅ Đã tìm thấy tọa độ: ${parsedCoords[1].toFixed(6)}, ${parsedCoords[0].toFixed(6)}`}
-                        type="success"
-                        showIcon
-                        style={{ marginBottom: 16 }}
-                        closable
-                        onClose={() => setParsedCoords(null)}
-                    />
+                    <>
+                        <Alert
+                            message={`✅ Đã tìm thấy tọa độ: ${parsedCoords[1].toFixed(6)}, ${parsedCoords[0].toFixed(6)}`}
+                            type="success"
+                            showIcon
+                            style={{ marginBottom: 16 }}
+                            closable
+                            onClose={() => {
+                                setParsedCoords(null)
+                                setShowMap(false)
+                            }}
+                        />
+                        <Space style={{ marginBottom: 16, width: '100%' }} wrap>
+                            <Button
+                                icon={<AimOutlined />}
+                                onClick={() => setShowMap(!showMap)}
+                                type={showMap ? 'primary' : 'default'}
+                                size="middle"
+                            >
+                                {showMap ? 'Ẩn Bản Đồ' : 'Hiển Thị Bản Đồ'}
+                            </Button>
+                            <span style={{ color: '#52c41a', fontWeight: 500 }}>
+                                ✓ Tọa độ: {parsedCoords[1].toFixed(6)}, {parsedCoords[0].toFixed(6)}
+                            </span>
+                        </Space>
+
+                        {showMap && MAPBOX_TOKEN && (
+                            <Card
+                                size="small"
+                                style={{ marginBottom: 16 }}
+                                styles={{ body: { padding: 0, height: '400px' } }}
+                            >
+                                <Map
+                                    mapboxAccessToken={MAPBOX_TOKEN}
+                                    {...mapViewState}
+                                    onMove={evt => setMapViewState(evt.viewState)}
+                                    onClick={handleMapClick}
+                                    style={{ width: '100%', height: '100%' }}
+                                    mapStyle="mapbox://styles/mapbox/streets-v12"
+                                    cursor="crosshair"
+                                >
+                                    {parsedCoords && (
+                                        <Marker
+                                            longitude={parsedCoords[0]}
+                                            latitude={parsedCoords[1]}
+                                            anchor="bottom"
+                                        >
+                                            <div style={{
+                                                width: '30px',
+                                                height: '30px',
+                                                borderRadius: '50%',
+                                                background: '#dc2626',
+                                                border: '3px solid #fff',
+                                                boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                color: '#fff',
+                                                fontSize: '16px'
+                                            }}>
+                                                📍
+                                            </div>
+                                        </Marker>
+                                    )}
+                                </Map>
+                                <div style={{
+                                    position: 'absolute',
+                                    bottom: '10px',
+                                    left: '10px',
+                                    background: 'rgba(255,255,255,0.9)',
+                                    padding: '8px 12px',
+                                    borderRadius: '4px',
+                                    fontSize: '12px',
+                                    zIndex: 1000,
+                                    pointerEvents: 'none'
+                                }}>
+                                    💡 Click trên bản đồ để điều chỉnh tọa độ
+                                </div>
+                            </Card>
+                        )}
+
+                        {showMap && !MAPBOX_TOKEN && (
+                            <Alert
+                                message="Chưa có Mapbox Token"
+                                description="Vui lòng cấu hình VITE_MAPBOX_TOKEN trong file .env để sử dụng bản đồ"
+                                type="warning"
+                                showIcon
+                                style={{ marginBottom: 16 }}
+                            />
+                        )}
+                    </>
                 )}
 
                 <Form.Item

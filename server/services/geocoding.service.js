@@ -37,7 +37,8 @@ class GeocodingService {
             const coords = await this.geocodeWithNominatim(address);
             if (coords) return coords;
         } catch (error) {
-            console.error('Nominatim geocoding error:', error.message);
+            // Chỉ log warning cho Nominatim (primary method)
+            console.warn('Nominatim geocoding warning:', error.message);
         }
 
         // Ưu tiên 2: Mapbox Geocoding API (backup - nếu có token)
@@ -46,7 +47,12 @@ class GeocodingService {
                 const coords = await this.geocodeWithMapbox(address);
                 if (coords) return coords;
             } catch (error) {
-                console.error('Mapbox geocoding error:', error.message);
+                // Chỉ log warning, không log error (vì đây là fallback method)
+                // Mapbox có thể fail do token không hợp lệ/rate limit, nhưng vẫn có Nominatim
+                if (error.response?.status !== 422) {
+                    console.warn('Mapbox geocoding warning:', error.message);
+                }
+                // 422 là lỗi thường gặp (invalid token/rate limit), không cần log
             }
         }
 
@@ -56,14 +62,16 @@ class GeocodingService {
                 const coords = await this.geocodeWithGoogle(address);
                 if (coords) return coords;
             } catch (error) {
-                console.error('Google geocoding error:', error.message);
+                // Chỉ log warning cho Google APIs (fallback methods)
+                console.warn('Google geocoding warning:', error.message);
             }
 
             try {
                 const coords = await this.geocodeWithGooglePlaces(address);
                 if (coords) return coords;
             } catch (error) {
-                console.error('Google Places error:', error.message);
+                // Chỉ log warning cho Google Places (fallback method)
+                console.warn('Google Places geocoding warning:', error.message);
             }
         }
 

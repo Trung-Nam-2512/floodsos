@@ -21,7 +21,8 @@ export const hotlines = [
     "unit": "Cứu hỏa",
     "phone": "115",
     "note": "Cứu hỏa",
-    "imageUrl": null
+    "imageUrl": null,
+    "imageTitle": null
   },
   {
     "id": 3,

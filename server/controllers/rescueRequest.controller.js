@@ -4,6 +4,7 @@ import aiService from '../services/ai.service.js';
 import duplicateCheckService from '../services/duplicateCheck.service.js';
 import { saveBase64Image } from '../config/upload.config.js';
 import logger from '../utils/logger.js';
+import { parseGoogleMapsCoords as parseCoords } from '../utils/googleMapsParser.js';
 
 /**
  * Controller xử lý yêu cầu cứu hộ (AI-powered)
@@ -70,15 +71,30 @@ class RescueRequestController {
                 urgency: parsedData.urgency
             });
 
-            // CHỈ dùng tọa độ từ Google Maps link (nếu có)
+            // Ưu tiên parse tọa độ từ Google Maps URL nếu có
             let finalCoords = [null, null];
-            if (coords && Array.isArray(coords) && coords.length === 2 &&
-                coords[0] !== null && coords[1] !== null &&
-                !isNaN(coords[0]) && !isNaN(coords[1])) {
-                finalCoords = coords;
-                console.log(' Sử dụng tọa độ từ Google Maps link:', finalCoords);
-            } else {
-                console.log(' Không có tọa độ từ Google Maps link. User cần cập nhật thủ công trên bản đồ.');
+
+            // Parse từ googleMapsUrl nếu có (ưu tiên cao nhất)
+            if (googleMapsUrl && typeof googleMapsUrl === 'string' && googleMapsUrl.trim()) {
+                const parsedCoords = this.parseGoogleMapsCoords(googleMapsUrl.trim());
+                if (parsedCoords && parsedCoords[0] !== null && parsedCoords[1] !== null) {
+                    finalCoords = parsedCoords;
+                    console.log('✅ Đã parse tọa độ từ Google Maps URL:', finalCoords);
+                } else {
+                    console.log('⚠️  Không thể parse tọa độ từ Google Maps URL:', googleMapsUrl);
+                }
+            }
+
+            // Nếu không có từ Google Maps URL, dùng tọa độ từ coords
+            if (finalCoords[0] === null || finalCoords[1] === null) {
+                if (coords && Array.isArray(coords) && coords.length === 2 &&
+                    coords[0] !== null && coords[1] !== null &&
+                    !isNaN(coords[0]) && !isNaN(coords[1])) {
+                    finalCoords = coords;
+                    console.log('✅ Sử dụng tọa độ từ coords:', finalCoords);
+                } else {
+                    console.log('⚠️  Không có tọa độ. User cần cập nhật thủ công trên bản đồ.');
+                }
             }
 
             // Tạo request mới và lưu vào database
@@ -390,27 +406,106 @@ class RescueRequestController {
             const { id } = req.params;
             const { status, assignedTo, notes } = req.body;
 
-            const updateData = { status };
-            if (assignedTo) updateData.assignedTo = assignedTo;
-            if (notes) updateData.notes = notes;
-            if (status === 'Đã xử lý') {
-                updateData.processedAt = new Date();
+            console.log(`🔄 Đang cập nhật status cho ID: ${id}, Status mới: ${status}`);
+
+            // Validate status
+            const validStatuses = ['Chưa xử lý', 'Đang xử lý', 'Đã xử lý', 'Không thể cứu'];
+            if (!status || !validStatuses.includes(status)) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Status không hợp lệ. Phải là một trong: ${validStatuses.join(', ')}`
+                });
             }
 
-            const request = await RescueRequest.findByIdAndUpdate(
-                id,
-                updateData,
-                { new: true }
-            );
+            // Validate ID
+            if (!id) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'ID không hợp lệ'
+                });
+            }
+
+            // Thử tìm trong RescueRequest trước
+            let request = await RescueRequest.findById(id);
+            console.log(`🔍 Tìm thấy RescueRequest: ${request ? 'Có' : 'Không'}`);
+
+            // Nếu không tìm thấy, thử tìm trong Report (manual report)
+            if (!request) {
+                const report = await Report.findById(id);
+                if (report) {
+                    // Report không có status field, nhưng có thể lưu trong notes hoặc metadata
+                    // Vì Report không có status, ta chỉ log và trả về success
+                    console.log(`ℹ️  Report (manual) không có status field. ID: ${id}, Status yêu cầu: ${status}`);
+
+                    // Convert Report sang format giống RescueRequest để trả về
+                    let coords = [null, null];
+                    if (report.location && report.location.lat && report.location.lng) {
+                        coords = [report.location.lng, report.location.lat];
+                    }
+
+                    request = {
+                        _id: report._id,
+                        location: report.description ? report.description.substring(0, 100) : 'Không rõ vị trí',
+                        coords: coords,
+                        urgency: 'CẦN CỨU TRỢ',
+                        people: report.name ? `Người báo cáo: ${report.name}` : 'không rõ',
+                        needs: 'cứu hộ',
+                        description: report.description || '',
+                        contact: report.phone || null,
+                        contactFull: report.phone || null,
+                        status: status || 'Chưa xử lý', // Trả về status đã yêu cầu
+                        timestamp: report.createdAt ? Math.floor(new Date(report.createdAt).getTime() / 1000) : Math.floor(Date.now() / 1000),
+                        fullDetails: {
+                            source: 'manual_report',
+                            reportId: report._id.toString()
+                        }
+                    };
+
+                    console.log(`✅ Cập nhật status cho Report (manual): ${id} → ${status}`);
+
+                    return res.json({
+                        success: true,
+                        message: 'Đã cập nhật status (lưu ý: Report không có status field trong DB)',
+                        data: request
+                    });
+                }
+            } else {
+                // Tìm thấy trong RescueRequest, update bình thường
+                console.log(`📝 Status hiện tại: ${request.status}, Status mới: ${status}`);
+
+                const updateData = { status };
+                if (assignedTo) updateData.assignedTo = assignedTo;
+                if (notes) updateData.notes = notes;
+                if (status === 'Đã xử lý') {
+                    updateData.processedAt = new Date();
+                }
+
+                console.log(`💾 Dữ liệu cập nhật:`, updateData);
+
+                request = await RescueRequest.findByIdAndUpdate(
+                    id,
+                    { $set: updateData },
+                    { new: true, runValidators: true }
+                );
+
+                if (!request) {
+                    console.error(`❌ Không tìm thấy document sau khi update. ID: ${id}`);
+                    return res.status(404).json({
+                        success: false,
+                        message: 'Không tìm thấy rescue request sau khi cập nhật'
+                    });
+                }
+
+                console.log(`✅ Cập nhật status thành công cho RescueRequest: ${id} → ${status}`);
+                console.log(`✅ Status sau khi update: ${request.status}`);
+            }
 
             if (!request) {
                 return res.status(404).json({
                     success: false,
-                    message: 'Không tìm thấy rescue request'
+                    message: 'Không tìm thấy rescue request hoặc report'
                 });
             }
-
-            console.log(`✅ Cập nhật status: ${id} → ${status}`);
 
             res.json({
                 success: true,
@@ -418,6 +513,7 @@ class RescueRequestController {
                 data: request
             });
         } catch (error) {
+            console.error('❌ Lỗi khi cập nhật status:', error);
             res.status(500).json({
                 success: false,
                 message: 'Lỗi khi cập nhật status',
@@ -457,18 +553,51 @@ class RescueRequestController {
                 });
             }
 
-            // Tìm rescue request
-            const request = await RescueRequest.findById(id);
+            // Tìm rescue request - thử RescueRequest trước, nếu không có thì thử Report
+            let request = await RescueRequest.findById(id);
+            let isReport = false;
+
             if (!request) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Không tìm thấy rescue request'
-                });
+                // Thử tìm trong Report (manual report)
+                const report = await Report.findById(id);
+                if (report) {
+                    isReport = true;
+                    // Convert Report sang format tạm để xử lý
+                    let coords = [null, null];
+                    if (report.location && report.location.lat && report.location.lng) {
+                        coords = [report.location.lng, report.location.lat];
+                    }
+                    request = {
+                        _id: report._id,
+                        location: report.description ? report.description.substring(0, 100) : 'Không rõ vị trí',
+                        coords: coords,
+                        urgency: 'CẦN CỨU TRỢ',
+                        people: report.name ? `Người báo cáo: ${report.name}` : 'không rõ',
+                        needs: 'cứu hộ',
+                        description: report.description || '',
+                        contact: report.phone || null,
+                        contactFull: report.phone || null,
+                        status: 'Chưa xử lý',
+                        rawText: report.description || '',
+                        imagePath: report.imagePath || null,
+                        fullDetails: {
+                            source: 'manual_report',
+                            reportId: report._id.toString()
+                        },
+                        // Lưu reference để update sau
+                        _reportDoc: report
+                    };
+                } else {
+                    return res.status(404).json({
+                        success: false,
+                        message: 'Không tìm thấy rescue request hoặc report'
+                    });
+                }
             }
 
             // Build update data (chỉ update các field được gửi lên)
             const updateData = {};
-            
+
             if (location !== undefined) updateData.location = location;
             if (urgency !== undefined && ['CỰC KỲ KHẨN CẤP', 'KHẨN CẤP', 'CẦN CỨU TRỢ'].includes(urgency)) {
                 updateData.urgency = urgency;
@@ -509,7 +638,7 @@ class RescueRequestController {
                         finalCoords = [lng, lat];
                     }
                 }
-                
+
                 if (finalCoords) {
                     updateData.coords = finalCoords;
                 } else if (coords !== null) {
@@ -520,21 +649,92 @@ class RescueRequestController {
                 }
             }
 
-            // Update request
-            const updatedRequest = await RescueRequest.findByIdAndUpdate(
-                id,
-                updateData,
-                { new: true, runValidators: true }
-            );
+            // Update request - xử lý khác nhau cho Report và RescueRequest
+            let updatedRequest;
 
-            if (!updatedRequest) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Không tìm thấy rescue request sau khi update'
-                });
+            if (isReport) {
+                // Update Report (manual report)
+                const reportUpdateData = {};
+
+                // Map các field từ RescueRequest format sang Report format
+                if (description !== undefined) reportUpdateData.description = description;
+                if (contact !== undefined || contactFull !== undefined) {
+                    reportUpdateData.phone = contactFull || contact || request._reportDoc.phone;
+                }
+                if (people !== undefined) {
+                    // Extract name từ "Người báo cáo: {name}"
+                    const nameMatch = people.match(/Người báo cáo:\s*(.+)/);
+                    if (nameMatch) {
+                        reportUpdateData.name = nameMatch[1].trim();
+                    } else {
+                        reportUpdateData.name = people;
+                    }
+                }
+                if (coords !== undefined && coords !== null) {
+                    // Convert [lng, lat] sang {lat, lng}
+                    if (Array.isArray(coords) && coords.length === 2) {
+                        reportUpdateData.location = { lat: coords[1], lng: coords[0] };
+                    }
+                }
+
+                const updatedReport = await Report.findByIdAndUpdate(
+                    id,
+                    reportUpdateData,
+                    { new: true, runValidators: true }
+                );
+
+                if (!updatedReport) {
+                    return res.status(404).json({
+                        success: false,
+                        message: 'Không tìm thấy report sau khi update'
+                    });
+                }
+
+                // Convert lại sang format giống RescueRequest để trả về
+                let finalCoords = [null, null];
+                if (updatedReport.location && updatedReport.location.lat && updatedReport.location.lng) {
+                    finalCoords = [updatedReport.location.lng, updatedReport.location.lat];
+                }
+
+                updatedRequest = {
+                    _id: updatedReport._id,
+                    location: updatedReport.description ? updatedReport.description.substring(0, 100) : 'Không rõ vị trí',
+                    coords: finalCoords,
+                    urgency: urgency || 'CẦN CỨU TRỢ',
+                    people: updatedReport.name ? `Người báo cáo: ${updatedReport.name}` : (people || 'không rõ'),
+                    needs: needs || 'cứu hộ',
+                    description: updatedReport.description || '',
+                    contact: updatedReport.phone || null,
+                    contactFull: updatedReport.phone || null,
+                    status: status || 'Chưa xử lý',
+                    rawText: updatedReport.description || '',
+                    imagePath: updatedReport.imagePath || null,
+                    fullDetails: {
+                        source: 'manual_report',
+                        reportId: updatedReport._id.toString()
+                    },
+                    createdAt: updatedReport.createdAt,
+                    updatedAt: updatedReport.updatedAt
+                };
+
+                console.log(`✅ Admin đã cập nhật Report (manual): ${id}`);
+            } else {
+                // Update RescueRequest (AI report)
+                updatedRequest = await RescueRequest.findByIdAndUpdate(
+                    id,
+                    updateData,
+                    { new: true, runValidators: true }
+                );
+
+                if (!updatedRequest) {
+                    return res.status(404).json({
+                        success: false,
+                        message: 'Không tìm thấy rescue request sau khi update'
+                    });
+                }
+
+                console.log(`✅ Admin đã cập nhật RescueRequest: ${id}`);
             }
-
-            console.log(`✅ Admin đã cập nhật rescue request: ${id}`);
 
             res.json({
                 success: true,
@@ -559,6 +759,8 @@ class RescueRequestController {
         try {
             const { id } = req.params;
 
+            console.log(`🗑️  Bắt đầu xóa rescue request với ID: ${id}`);
+
             // Validate ID
             if (!id) {
                 return res.status(400).json({
@@ -567,28 +769,114 @@ class RescueRequestController {
                 });
             }
 
-            // Tìm và xóa rescue request
-            const request = await RescueRequest.findByIdAndDelete(id);
+            // Tìm rescue request trước khi xóa (để lấy thông tin reportId nếu có)
+            const request = await RescueRequest.findById(id);
+            console.log(`🔍 Tìm thấy RescueRequest: ${request ? 'Có' : 'Không'}`);
 
             if (!request) {
+                // Nếu không tìm thấy trong RescueRequest, thử tìm trong Report (manual report)
+                console.log(`🔍 Đang tìm trong Report collection...`);
+                const report = await Report.findByIdAndDelete(id);
+                if (report) {
+                    console.log(`✅ Tìm thấy và đã xóa Report: ${id}`);
+
+                    // Xóa hình ảnh của Report nếu có
+                    if (report.imagePath) {
+                        try {
+                            const fs = await import('fs');
+                            const path = await import('path');
+                            const { fileURLToPath } = await import('url');
+                            const { dirname } = await import('path');
+
+                            const __filename = fileURLToPath(import.meta.url);
+                            const __dirname = dirname(__filename);
+                            const imagePath = path.join(__dirname, '..', report.imagePath);
+
+                            if (fs.existsSync(imagePath)) {
+                                fs.unlinkSync(imagePath);
+                                console.log(`🗑️  Đã xóa hình ảnh Report: ${imagePath}`);
+                            }
+                        } catch (imgError) {
+                            console.warn('⚠️  Không thể xóa hình ảnh Report:', imgError);
+                        }
+                    }
+
+                    // Xóa RescueRequest tương ứng nếu có (tìm theo reportId trong fullDetails)
+                    const deletedRescueRequests = await RescueRequest.deleteMany({
+                        'fullDetails.reportId': id.toString()
+                    });
+                    console.log(`🗑️  Đã xóa ${deletedRescueRequests.deletedCount} RescueRequest liên quan`);
+
+                    // Verify xóa thành công
+                    const verifyReport = await Report.findById(id);
+                    if (verifyReport) {
+                        console.error(`❌ LỖI: Report vẫn còn tồn tại sau khi xóa! ID: ${id}`);
+                        return res.status(500).json({
+                            success: false,
+                            message: 'Không thể xóa report (vẫn còn trong database)'
+                        });
+                    }
+
+                    console.log(`✅ Admin đã xóa Report (manual): ${id}`);
+                    return res.json({
+                        success: true,
+                        message: 'Đã xóa báo cáo thành công',
+                        data: { id }
+                    });
+                }
+
+                console.error(`❌ Không tìm thấy rescue request hoặc report với ID: ${id}`);
                 return res.status(404).json({
                     success: false,
-                    message: 'Không tìm thấy rescue request'
+                    message: 'Không tìm thấy rescue request hoặc report'
                 });
             }
 
+            // Xóa RescueRequest
+            console.log(`🗑️  Đang xóa RescueRequest: ${id}`);
+            const deletedRequest = await RescueRequest.findByIdAndDelete(id);
+
+            if (!deletedRequest) {
+                console.error(`❌ LỖI: Không thể xóa RescueRequest. ID: ${id}`);
+                return res.status(500).json({
+                    success: false,
+                    message: 'Không thể xóa rescue request'
+                });
+            }
+
+            console.log(`✅ Đã xóa RescueRequest thành công: ${id}`);
+
+            // Verify xóa thành công
+            const verifyRequest = await RescueRequest.findById(id);
+            if (verifyRequest) {
+                console.error(`❌ LỖI: RescueRequest vẫn còn tồn tại sau khi xóa! ID: ${id}`);
+                return res.status(500).json({
+                    success: false,
+                    message: 'Không thể xóa rescue request (vẫn còn trong database)'
+                });
+            }
+
+            // Nếu đây là manual report (có reportId trong fullDetails), xóa cả Report
+            if (deletedRequest.fullDetails && deletedRequest.fullDetails.reportId) {
+                const reportId = deletedRequest.fullDetails.reportId;
+                const report = await Report.findByIdAndDelete(reportId);
+                if (report) {
+                    console.log(`🗑️  Đã xóa Report tương ứng: ${reportId}`);
+                }
+            }
+
             // Xóa hình ảnh nếu có
-            if (request.imagePath) {
+            if (deletedRequest.imagePath) {
                 try {
                     const fs = await import('fs');
                     const path = await import('path');
                     const { fileURLToPath } = await import('url');
                     const { dirname } = await import('path');
-                    
+
                     const __filename = fileURLToPath(import.meta.url);
                     const __dirname = dirname(__filename);
-                    const imagePath = path.join(__dirname, '..', request.imagePath);
-                    
+                    const imagePath = path.join(__dirname, '..', deletedRequest.imagePath);
+
                     if (fs.existsSync(imagePath)) {
                         fs.unlinkSync(imagePath);
                         console.log(`🗑️  Đã xóa hình ảnh: ${imagePath}`);
@@ -599,113 +887,160 @@ class RescueRequestController {
                 }
             }
 
-            console.log(`✅ Admin đã xóa rescue request: ${id}`);
+            console.log(`✅ Admin đã xóa rescue request thành công: ${id}`);
 
             res.json({
                 success: true,
-                message: 'Đã xóa rescue request thành công',
+                message: 'Đã xóa báo cáo thành công',
                 data: { id }
             });
         } catch (error) {
+            console.error('❌ Lỗi khi xóa rescue request:', error);
             logger.error('Lỗi khi xóa rescue request', error, req);
             res.status(500).json({
                 success: false,
-                message: 'Lỗi khi xóa rescue request',
+                message: 'Lỗi khi xóa báo cáo',
                 error: error.message
             });
         }
     }
 
     /**
+     * Parse tọa độ từ Google Maps URL
+     * @param {string} url - Google Maps URL
+     * @returns {Array|null} [lng, lat] hoặc null
+     */
+    parseGoogleMapsCoords(url) {
+        return parseCoords(url, { outputFormat: 'array' });
+    }
+
+    /**
      * Cập nhật tọa độ của rescue request
      * PUT /api/rescue-requests/:id/coords
      * Hỗ trợ cả RescueRequest và Report (manual report)
+     * Hỗ trợ parse Google Maps link tự động
      */
     async updateCoords(req, res) {
         try {
             const { id } = req.params;
-            const { coords } = req.body; // [lng, lat] hoặc { lng, lat }
+            const { coords, googleMapsUrl } = req.body; // [lng, lat] hoặc { lng, lat } hoặc googleMapsUrl
 
-            // Validate coords
+            // Ưu tiên parse từ Google Maps URL nếu có
             let finalCoords = null;
-            if (Array.isArray(coords) && coords.length === 2) {
-                const [lng, lat] = coords;
-                if (typeof lng === 'number' && typeof lat === 'number' &&
-                    !isNaN(lng) && !isNaN(lat) &&
-                    lng >= -180 && lng <= 180 &&
-                    lat >= -90 && lat <= 90) {
-                    finalCoords = [lng, lat];
+
+            if (googleMapsUrl && typeof googleMapsUrl === 'string' && googleMapsUrl.trim()) {
+                const parsedCoords = this.parseGoogleMapsCoords(googleMapsUrl.trim());
+                if (parsedCoords) {
+                    finalCoords = parsedCoords;
+                    console.log(`📍 Đã parse tọa độ từ Google Maps link: [${finalCoords[0]}, ${finalCoords[1]}]`);
+                } else {
+                    console.warn('⚠️  Không thể parse tọa độ từ Google Maps link:', googleMapsUrl);
                 }
-            } else if (coords && typeof coords === 'object') {
-                const { lng, lat } = coords;
-                if (typeof lng === 'number' && typeof lat === 'number' &&
-                    !isNaN(lng) && !isNaN(lat) &&
-                    lng >= -180 && lng <= 180 &&
-                    lat >= -90 && lat <= 90) {
-                    finalCoords = [lng, lat];
+            }
+
+            // Nếu không có từ Google Maps, thử parse từ coords
+            if (!finalCoords) {
+                if (Array.isArray(coords) && coords.length === 2) {
+                    const [lng, lat] = coords;
+                    if (typeof lng === 'number' && typeof lat === 'number' &&
+                        !isNaN(lng) && !isNaN(lat) &&
+                        lng >= -180 && lng <= 180 &&
+                        lat >= -90 && lat <= 90) {
+                        finalCoords = [lng, lat];
+                    }
+                } else if (coords && typeof coords === 'object') {
+                    const { lng, lat } = coords;
+                    if (typeof lng === 'number' && typeof lat === 'number' &&
+                        !isNaN(lng) && !isNaN(lat) &&
+                        lng >= -180 && lng <= 180 &&
+                        lat >= -90 && lat <= 90) {
+                        finalCoords = [lng, lat];
+                    }
+                } else if (typeof coords === 'string' && coords.trim()) {
+                    // Thử parse từ string "lat, lng" hoặc "lng, lat"
+                    const parts = coords.trim().split(',').map(s => s.trim());
+                    if (parts.length === 2) {
+                        const num1 = parseFloat(parts[0]);
+                        const num2 = parseFloat(parts[1]);
+                        if (!isNaN(num1) && !isNaN(num2)) {
+                            // Thử cả 2 cách: [lng, lat] và [lat, lng]
+                            if (num1 >= -90 && num1 <= 90 && num2 >= -180 && num2 <= 180) {
+                                // num1 là lat, num2 là lng
+                                finalCoords = [num2, num1];
+                            } else if (num1 >= -180 && num1 <= 180 && num2 >= -90 && num2 <= 90) {
+                                // num1 là lng, num2 là lat
+                                finalCoords = [num1, num2];
+                            }
+                        }
+                    }
                 }
             }
 
             if (!finalCoords) {
                 return res.status(400).json({
                     success: false,
-                    message: 'Tọa độ không hợp lệ. Vui lòng cung cấp [lng, lat] hoặc { lng, lat }'
+                    message: 'Tọa độ không hợp lệ. Vui lòng cung cấp Google Maps link, [lng, lat], { lng, lat }, hoặc string "lat, lng"'
                 });
             }
 
             // Thử tìm trong RescueRequest trước
-            let request = await RescueRequest.findByIdAndUpdate(
-                id,
-                { coords: finalCoords },
-                { new: true }
-            );
+            let request = await RescueRequest.findById(id);
+            let isReport = false;
 
-            // Nếu không tìm thấy trong RescueRequest, thử tìm trong Report (manual report)
-            if (!request) {
-                const report = await Report.findByIdAndUpdate(
+            if (request) {
+                // Update RescueRequest
+                const updateData = { coords: finalCoords };
+                if (googleMapsUrl) {
+                    updateData.googleMapsUrl = googleMapsUrl.trim();
+                }
+
+                request = await RescueRequest.findByIdAndUpdate(
                     id,
-                    { location: { lat: finalCoords[1], lng: finalCoords[0] } }, // Report dùng {lat, lng}
+                    updateData,
                     { new: true }
                 );
+                console.log(`✅ Cập nhật tọa độ RescueRequest: ${id} → [${finalCoords[0]}, ${finalCoords[1]}]`);
+            } else {
+                // Nếu không tìm thấy trong RescueRequest, thử tìm trong Report (manual report)
+                const report = await Report.findById(id);
 
                 if (report) {
-                    console.log(`✅ Cập nhật tọa độ Report: ${id} → [${finalCoords[0]}, ${finalCoords[1]}]`);
-
-                    // Tìm và cập nhật RescueRequest tương ứng (nếu có)
-                    const rescueRequest = await RescueRequest.findOne({
-                        'fullDetails.reportId': id.toString()
-                    });
-
-                    if (rescueRequest) {
-                        await RescueRequest.findByIdAndUpdate(
-                            rescueRequest._id,
-                            { coords: finalCoords },
-                            { new: true }
-                        );
-                        console.log(`✅ Đã cập nhật cả RescueRequest tương ứng: ${rescueRequest._id}`);
-                    }
-
-                    // Convert Report sang format giống RescueRequest để trả về
-                    request = {
-                        _id: report._id,
-                        location: report.description ? report.description.substring(0, 100) : 'Không rõ vị trí',
-                        coords: finalCoords,
-                        urgency: 'CẦN CỨU TRỢ',
-                        people: report.name ? `Người báo cáo: ${report.name}` : 'không rõ',
-                        needs: 'cứu hộ',
-                        description: report.description || '',
-                        contact: report.phone || null,
-                        contactFull: report.phone || null,
-                        status: 'Chưa xử lý',
-                        timestamp: report.createdAt ? Math.floor(new Date(report.createdAt).getTime() / 1000) : Math.floor(Date.now() / 1000),
-                        fullDetails: {
-                            source: 'manual_report',
-                            reportId: report._id.toString()
-                        }
+                    isReport = true;
+                    const updateData = {
+                        location: { lat: finalCoords[1], lng: finalCoords[0] } // Report dùng {lat, lng}
                     };
+
+                    const updatedReport = await Report.findByIdAndUpdate(
+                        id,
+                        updateData,
+                        { new: true }
+                    );
+
+                    if (updatedReport) {
+                        console.log(`✅ Cập nhật tọa độ Report: ${id} → [${finalCoords[0]}, ${finalCoords[1]}]`);
+
+                        // Convert Report sang format giống RescueRequest để trả về
+                        request = {
+                            _id: updatedReport._id,
+                            location: updatedReport.description ? updatedReport.description.substring(0, 100) : 'Không rõ vị trí',
+                            coords: finalCoords,
+                            urgency: 'CẦN CỨU TRỢ',
+                            people: updatedReport.name ? `Người báo cáo: ${updatedReport.name}` : 'không rõ',
+                            needs: 'cứu hộ',
+                            description: updatedReport.description || '',
+                            contact: updatedReport.phone || null,
+                            contactFull: updatedReport.phone || null,
+                            status: 'Chưa xử lý',
+                            timestamp: updatedReport.createdAt ? Math.floor(new Date(updatedReport.createdAt).getTime() / 1000) : Math.floor(Date.now() / 1000),
+                            fullDetails: {
+                                source: 'manual_report',
+                                reportId: updatedReport._id.toString()
+                            },
+                            createdAt: updatedReport.createdAt,
+                            updatedAt: updatedReport.updatedAt
+                        };
+                    }
                 }
-            } else {
-                console.log(`✅ Cập nhật tọa độ RescueRequest: ${id} → [${finalCoords[0]}, ${finalCoords[1]}]`);
             }
 
             if (!request) {
@@ -736,35 +1071,89 @@ class RescueRequestController {
      */
     async getStats(req, res) {
         try {
-            const [total, byUrgency, byStatus, recentCount] = await Promise.all([
+            // Tính toán từ cả 2 collections: RescueRequest và Report
+            const [
+                rescueRequestTotal,
+                reportTotal,
+                rescueRequestByUrgency,
+                rescueRequestByStatus,
+                rescueRequestLast24h,
+                reportLast24h
+            ] = await Promise.all([
+                // Tổng số từ RescueRequest
                 RescueRequest.countDocuments(),
+                // Tổng số từ Report
+                Report.countDocuments(),
+                // Group by urgency từ RescueRequest
                 RescueRequest.aggregate([
                     { $group: { _id: '$urgency', count: { $sum: 1 } } }
                 ]),
+                // Group by status từ RescueRequest
                 RescueRequest.aggregate([
                     { $group: { _id: '$status', count: { $sum: 1 } } }
                 ]),
+                // RescueRequest trong 24h gần đây
                 RescueRequest.countDocuments({
+                    $or: [
+                        { createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+                        { timestamp: { $gte: Math.floor((Date.now() - 24 * 60 * 60 * 1000) / 1000) } }
+                    ]
+                }),
+                // Report trong 24h gần đây
+                Report.countDocuments({
                     createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
                 })
             ]);
+
+            // Tổng số từ cả 2 collections
+            const total = rescueRequestTotal + reportTotal;
+
+            // Convert urgency aggregation từ RescueRequest
+            const byUrgencyObj = rescueRequestByUrgency.reduce((acc, item) => {
+                acc[item._id] = item.count;
+                return acc;
+            }, {});
+
+            // Report không có urgency field, tất cả coi như "CẦN CỨU TRỢ"
+            if (reportTotal > 0) {
+                byUrgencyObj['CẦN CỨU TRỢ'] = (byUrgencyObj['CẦN CỨU TRỢ'] || 0) + reportTotal;
+            }
+
+            // Convert status aggregation từ RescueRequest
+            const byStatusObj = rescueRequestByStatus.reduce((acc, item) => {
+                acc[item._id] = item.count;
+                return acc;
+            }, {});
+
+            // Report không có status field, tất cả coi như "Chưa xử lý"
+            if (reportTotal > 0) {
+                byStatusObj['Chưa xử lý'] = (byStatusObj['Chưa xử lý'] || 0) + reportTotal;
+            }
+
+            // Tổng số trong 24h gần đây từ cả 2 collections
+            const last24h = rescueRequestLast24h + reportLast24h;
+
+            // Log để debug
+            // console.log('📊 Stats calculated (from both collections):', {
+            //     rescueRequestTotal,
+            //     reportTotal,
+            //     total,
+            //     byStatus: byStatusObj,
+            //     last24h,
+            //     byUrgency: byUrgencyObj
+            // });
 
             res.json({
                 success: true,
                 data: {
                     total,
-                    byUrgency: byUrgency.reduce((acc, item) => {
-                        acc[item._id] = item.count;
-                        return acc;
-                    }, {}),
-                    byStatus: byStatus.reduce((acc, item) => {
-                        acc[item._id] = item.count;
-                        return acc;
-                    }, {}),
-                    last24h: recentCount
+                    byUrgency: byUrgencyObj,
+                    byStatus: byStatusObj,
+                    last24h
                 }
             });
         } catch (error) {
+            console.error('❌ Error in getStats:', error);
             res.status(500).json({
                 success: false,
                 message: 'Lỗi khi lấy thống kê',

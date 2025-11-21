@@ -31,7 +31,7 @@ const storage = multer.diskStorage({
 // Filter chỉ cho phép hình ảnh
 const fileFilter = (req, file, cb) => {
   const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
-  
+
   if (allowedTypes.includes(file.mimetype)) {
     cb(null, true);
   } else {
@@ -50,9 +50,10 @@ const upload = multer({
 /**
  * Lưu base64 image thành file
  * @param {string} base64String - Image dạng base64
+ * @param {string} subfolder - Thư mục con (ví dụ: 'news', 'hotlines'). Mặc định: 'rescue'
  * @returns {string} - Path tới file đã lưu
  */
-export const saveBase64Image = (base64String) => {
+export const saveBase64Image = (base64String, subfolder = 'rescue') => {
   try {
     // Parse base64 string
     const matches = base64String.match(/^data:image\/(\w+);base64,(.+)$/);
@@ -64,16 +65,23 @@ export const saveBase64Image = (base64String) => {
     const imageData = matches[2];
     const buffer = Buffer.from(imageData, 'base64');
 
+    // Tạo thư mục con nếu chưa có
+    const subfolderDir = path.join(uploadDir, subfolder);
+    if (!fs.existsSync(subfolderDir)) {
+      fs.mkdirSync(subfolderDir, { recursive: true });
+      console.log(`✅ Đã tạo thư mục uploads/${subfolder}`);
+    }
+
     // Tạo tên file unique
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const filename = `rescue-${uniqueSuffix}.${imageType}`;
-    const filepath = path.join(uploadDir, filename);
+    const filename = `${subfolder}-${uniqueSuffix}.${imageType}`;
+    const filepath = path.join(subfolderDir, filename);
 
     // Lưu file
     fs.writeFileSync(filepath, buffer);
-    
+
     // Trả về relative path (để serve qua Express)
-    return `/uploads/${filename}`;
+    return `/uploads/${subfolder}/${filename}`;
   } catch (error) {
     console.error('Lỗi lưu hình ảnh:', error);
     throw error;
@@ -82,18 +90,28 @@ export const saveBase64Image = (base64String) => {
 
 /**
  * Xóa file hình ảnh
- * @param {string} imagePath - Path tới file (ví dụ: /uploads/rescue-123.jpg)
+ * @param {string} imagePath - Path tới file (ví dụ: /uploads/rescue-123.jpg hoặc /uploads/support-requests/filename.jpg)
  */
 export const deleteImage = (imagePath) => {
   try {
     if (!imagePath) return;
-    
-    const filename = path.basename(imagePath);
-    const filepath = path.join(uploadDir, filename);
-    
+
+    // Xử lý path: có thể là /uploads/filename.jpg hoặc /uploads/subfolder/filename.jpg
+    // Loại bỏ /uploads/ ở đầu nếu có
+    let relativePath = imagePath;
+    if (imagePath.startsWith('/uploads/')) {
+      relativePath = imagePath.substring('/uploads/'.length);
+    } else if (imagePath.startsWith('uploads/')) {
+      relativePath = imagePath.substring('uploads/'.length);
+    }
+
+    const filepath = path.join(uploadDir, relativePath);
+
     if (fs.existsSync(filepath)) {
       fs.unlinkSync(filepath);
-      console.log(`✅ Đã xóa hình ảnh: ${filename}`);
+      console.log(`✅ Đã xóa hình ảnh: ${relativePath}`);
+    } else {
+      console.warn(`⚠️  Không tìm thấy file để xóa: ${filepath}`);
     }
   } catch (error) {
     console.error('Lỗi xóa hình ảnh:', error);

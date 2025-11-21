@@ -1,7 +1,9 @@
 import RescueRequest from '../models/RescueRequest.model.js';
+import Report from '../models/Report.model.js';
 
 /**
  * Service để check duplicate rescue requests
+ * Check cả RescueRequest (AI) và Report (Manual)
  */
 class DuplicateCheckService {
     /**
@@ -12,13 +14,13 @@ class DuplicateCheckService {
      */
     calculateSimilarity(str1, str2) {
         if (!str1 || !str2) return 0;
-        
+
         const s1 = str1.toLowerCase().trim();
         const s2 = str2.toLowerCase().trim();
-        
+
         if (s1 === s2) return 1;
         if (s1.length === 0 || s2.length === 0) return 0;
-        
+
         // Tính Levenshtein distance
         const matrix = [];
         for (let i = 0; i <= s2.length; i++) {
@@ -40,7 +42,7 @@ class DuplicateCheckService {
                 }
             }
         }
-        
+
         const distance = matrix[s2.length][s1.length];
         const maxLength = Math.max(s1.length, s2.length);
         return 1 - (distance / maxLength);
@@ -53,7 +55,7 @@ class DuplicateCheckService {
      * @returns {number} Distance in meters
      */
     calculateDistance(coords1, coords2) {
-        if (!coords1 || !coords2 || 
+        if (!coords1 || !coords2 ||
             coords1.length < 2 || coords2.length < 2 ||
             !coords1[0] || !coords1[1] || !coords2[0] || !coords2[1]) {
             return Infinity;
@@ -66,8 +68,8 @@ class DuplicateCheckService {
         const dLat = (lat2 - lat1) * Math.PI / 180;
         const dLng = (lng2 - lng1) * Math.PI / 180;
         const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-                  Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-                  Math.sin(dLng / 2) * Math.sin(dLng / 2);
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLng / 2) * Math.sin(dLng / 2);
         const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
         return R * c;
     }
@@ -101,13 +103,75 @@ class DuplicateCheckService {
             } = newRequestData;
 
             // Tìm các request trong vòng 2 giờ gần đây
+            // Check cả RescueRequest (AI) và Report (Manual)
             const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
-            
-            const recentRequests = await RescueRequest.find({
-                createdAt: { $gte: twoHoursAgo }
-            }).sort({ createdAt: -1 }).limit(50);
 
-            if (recentRequests.length === 0) {
+            const [recentRescueRequests, recentReports] = await Promise.all([
+                RescueRequest.find({
+                    createdAt: { $gte: twoHoursAgo }
+                }).sort({ createdAt: -1 }).limit(50),
+                Report.find({
+                    createdAt: { $gte: twoHoursAgo }
+                }).sort({ createdAt: -1 }).limit(50)
+            ]);
+
+            // Convert Reports sang format giống RescueRequest để so sánh
+            const convertedReports = recentReports.map(report => {
+                let coords = [null, null];
+                if (report.location && report.location.lat && report.location.lng) {
+                    coords = [report.location.lng, report.location.lat];
+                }
+                return {
+                    _id: report._id,
+                    rawText: report.description || '',
+                    description: report.description || '',
+                    contact: report.phone || null,
+                    contactFull: report.phone || null,
+                    coords: coords,
+                    facebookUrl: null,
+                    location: report.description ? report.description.substring(0, 100) : null,
+                    createdAt: report.createdAt,
+                    fullDetails: {
+                        source: 'manual_report',
+                        reportId: report._id.toString()
+                    }
+                };
+            });
+
+            // Loại trừ các request liên quan (cùng reportId) để tránh false positive
+            // Khi manual report được tạo, nó tạo cả Report và RescueRequest
+            // Chúng ta chỉ cần check với một trong hai (ưu tiên RescueRequest vì nó hiển thị trên map)
+            const seenReportIds = new Set();
+            const filteredRequests = [];
+
+            // Đầu tiên, thêm tất cả RescueRequest (bao gồm cả từ manual report)
+            for (const req of recentRescueRequests) {
+                // Nếu là RescueRequest từ manual report, track reportId
+                if (req.fullDetails && req.fullDetails.reportId) {
+                    const reportId = req.fullDetails.reportId.toString();
+                    if (!seenReportIds.has(reportId)) {
+                        seenReportIds.add(reportId);
+                        filteredRequests.push(req);
+                    }
+                    // Nếu đã có RescueRequest với cùng reportId, bỏ qua
+                } else {
+                    // RescueRequest từ AI, không có reportId, luôn thêm vào
+                    filteredRequests.push(req);
+                }
+            }
+
+            // Sau đó, chỉ thêm Report nếu chưa có RescueRequest tương ứng
+            for (const req of convertedReports) {
+                const reportId = req._id.toString();
+                if (!seenReportIds.has(reportId)) {
+                    // Chưa có RescueRequest tương ứng, thêm Report vào
+                    filteredRequests.push(req);
+                    seenReportIds.add(reportId);
+                }
+                // Nếu đã có RescueRequest tương ứng, bỏ qua Report
+            }
+
+            if (filteredRequests.length === 0) {
                 return {
                     isDuplicate: false,
                     duplicates: [],
@@ -118,7 +182,7 @@ class DuplicateCheckService {
             const duplicates = [];
             let maxSimilarity = 0;
 
-            for (const existing of recentRequests) {
+            for (const existing of filteredRequests) {
                 let similarity = 0;
                 let matchReasons = [];
 
@@ -146,20 +210,22 @@ class DuplicateCheckService {
                 // 3. Check text similarity (description hoặc rawText)
                 const newText = (rawText || description || '').trim();
                 const existingText = (existing.rawText || existing.description || '').trim();
-                
-                if (newText.length > 20 && existingText.length > 20) {
+
+                // Yêu cầu text phải đủ dài và giống nhau đáng kể
+                if (newText.length > 30 && existingText.length > 30) {
                     const textSimilarity = this.calculateSimilarity(newText, existingText);
-                    if (textSimilarity > 0.7) {
-                        similarity += textSimilarity * 0.4;
+                    // Chỉ tính similarity nếu text giống nhau > 80%
+                    if (textSimilarity > 0.8) {
+                        similarity += textSimilarity * 0.5; // Tăng weight cho text giống hệt
                         matchReasons.push(`Nội dung giống ${Math.round(textSimilarity * 100)}%`);
-                    } else if (textSimilarity > 0.5) {
-                        similarity += textSimilarity * 0.2;
+                    } else if (textSimilarity > 0.7) {
+                        similarity += textSimilarity * 0.3; // Giảm weight cho text tương tự
                         matchReasons.push(`Nội dung tương tự ${Math.round(textSimilarity * 100)}%`);
                     }
                 }
 
                 // 4. Check location (nếu có tọa độ)
-                if (coords && coords[0] && coords[1] && 
+                if (coords && coords[0] && coords[1] &&
                     existing.coords && existing.coords[0] && existing.coords[1]) {
                     const distance = this.calculateDistance(coords, existing.coords);
                     if (distance < 100) { // Trong vòng 100m
@@ -178,14 +244,15 @@ class DuplicateCheckService {
                     }
                 }
 
-                // 5. Check thời gian (nếu tạo trong vòng 30 phút)
+                // 5. Check thời gian (nếu tạo trong vòng 15 phút - giảm từ 30 phút)
                 const timeDiff = Math.abs(new Date(existing.createdAt).getTime() - Date.now());
-                if (timeDiff < 30 * 60 * 1000) { // 30 phút
-                    similarity += 0.1;
+                if (timeDiff < 15 * 60 * 1000) { // 15 phút (giảm từ 30 phút)
+                    similarity += 0.05; // Giảm weight từ 0.1 xuống 0.05
                     matchReasons.push('Tạo gần thời điểm');
                 }
 
-                if (similarity > 0.5) { // Threshold: 50% similarity
+                // Chỉ thêm vào duplicates nếu similarity > 0.6 (tăng từ 0.5)
+                if (similarity > 0.6) {
                     duplicates.push({
                         _id: existing._id,
                         similarity: Math.round(similarity * 100) / 100,
@@ -205,8 +272,10 @@ class DuplicateCheckService {
             // Sắp xếp theo similarity giảm dần
             duplicates.sort((a, b) => b.similarity - a.similarity);
 
+            // Tăng threshold lên 0.75 (75%) để giảm false positives
+            // Chỉ coi là duplicate nếu similarity > 75%
             return {
-                isDuplicate: maxSimilarity > 0.6, // > 60% = duplicate
+                isDuplicate: maxSimilarity > 0.75, // > 75% = duplicate (tăng từ 60%)
                 duplicates: duplicates.slice(0, 5), // Chỉ trả về top 5
                 maxSimilarity: Math.round(maxSimilarity * 100) / 100
             };

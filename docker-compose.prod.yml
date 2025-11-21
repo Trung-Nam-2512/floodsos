@@ -23,8 +23,10 @@ services:
       - ./server/services/data:/app/services/data
       # Mount thư mục uploads để lưu hình ảnh (persist data)
       - ./server/uploads:/app/uploads
+    networks:
+      - cuuho-network
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:5000/api/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      test: [ "CMD", "node", "-e", "require('http').get('http://localhost:5000/api/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})" ]
       interval: 30s
       timeout: 3s
       retries: 3
@@ -50,4 +52,3 @@ services:
 networks:
   cuuho-network:
     driver: bridge
-

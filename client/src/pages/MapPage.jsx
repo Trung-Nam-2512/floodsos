@@ -1,18 +1,246 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+
+// Production mode check - chỉ log trong development
+const isDev = import.meta.env.MODE === 'development' || import.meta.env.DEV
+const devLog = (...args) => isDev && console.log(...args)
+const devWarn = (...args) => isDev && console.warn(...args)
 import { useNavigate, useLocation } from 'react-router-dom'
-import { Layout, Card, Button, Space, Typography, Alert, Spin, Tag, Input, List, Empty, Modal, message, Form, Upload, Tabs, Select } from 'antd'
-import { ArrowLeftOutlined, PhoneOutlined, HomeOutlined, FireOutlined, SearchOutlined, SendOutlined, GlobalOutlined, AimOutlined, EditOutlined, MenuOutlined, CloseOutlined, FilterOutlined, ClockCircleOutlined, EnvironmentOutlined, AppstoreOutlined, DashboardOutlined, FileTextOutlined, PlusOutlined, CameraOutlined } from '@ant-design/icons'
-import Map, { Marker, Popup } from 'react-map-gl'
+import { Layout, Card, Button, Space, Typography, Alert, Spin, Tag, Input, List, Empty, Modal, message, Form, Upload, Tabs, Select, Image, Checkbox, Row, Col } from 'antd'
+import { ArrowLeftOutlined, PhoneOutlined, HomeOutlined, FireOutlined, SearchOutlined, SendOutlined, GlobalOutlined, AimOutlined, EditOutlined, MenuOutlined, CloseOutlined, FilterOutlined, ClockCircleOutlined, EnvironmentOutlined, AppstoreOutlined, DashboardOutlined, FileTextOutlined, PlusOutlined, CameraOutlined, UserOutlined, CloudOutlined, GiftOutlined, ExclamationCircleOutlined } from '@ant-design/icons'
+import Map, { Marker, Popup, useMap } from 'react-map-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import axios from 'axios'
 import Supercluster from 'supercluster'
 import WaterLevelChart from '../components/WaterLevelChart'
+import { resizeImageForUpload } from '../utils/imageResize'
+import { parseAndConvertGoogleMapsCoords } from '../utils/coordinateTransform'
 import './MapPage.css'
 
 const { Header, Content, Sider } = Layout
 const { Title, Text } = Typography
 const { TextArea } = Input
 const { Search } = Input
+
+// Radar legend constants - Định nghĩa ngoài component để tránh lỗi hoisting
+const RADAR_GRADIENT_COLORS = [
+    'rgb(40, 16, 159)',   // 0
+    'rgb(40, 16, 159)',   // 
+    'rgb(40, 16, 159)',   // 
+    'rgb(40, 16, 159)',   // 
+    'rgb(24, 44, 168)',   // 
+    'rgb(0, 145, 148)',   // 20
+    'rgb(0, 174, 129)',   // 
+    'rgb(70, 205, 96)',   // 30
+    'rgb(195, 219, 38)',  // 
+    'rgb(245, 203, 8)',   // 40
+    'rgb(244, 159, 33)',  // 
+    'rgb(223, 102, 68)',  // 50
+    'rgb(190, 52, 94)',   // 
+    'rgb(157, 16, 109)',  // 60
+    'rgb(157, 16, 109)'   // 
+]
+
+const DBZ_VALUES = [0, 20, 30, 40, 50, 60]
+const MMH_VALUES = [0, 0.6, 3, 12, 50, 200]
+
+// Tạo gradient string - tính toán một lần
+const RADAR_GRADIENT_STOPS = RADAR_GRADIENT_COLORS.map((color, index) =>
+    `${color} ${(index / (RADAR_GRADIENT_COLORS.length - 1)) * 100}%`
+).join(', ')
+
+// Radar image bounds from API
+// Format for Mapbox image source: [SW, SE, NE, NW] - 4 corners [lng, lat]
+// Provided coordinates: 7.109075, 97.054972 và 25.250002, 114.987230
+// Đảo ngược thứ tự để khớp với ảnh radar (có thể cần [NW, NE, SE, SW])
+const VIETNAM_BOUNDS = [
+    [97.054972, 25.250002],  // Northwest [lng, lat] - đảo ngược
+    [114.987230, 25.250002], // Northeast [lng, lat]
+    [114.987230, 7.109075],  // Southeast [lng, lat]
+    [97.054972, 7.109075]    // Southwest [lng, lat] - đảo ngược
+]
+
+// Component to handle radar overlay layer
+function RadarOverlay({ visible, offset = 0, mapInstance = null }) {
+    const mapContext = useMap()
+    const imageId = 'radar-overlay-image'
+    const sourceId = 'radar-overlay-source'
+    const layerId = 'radar-overlay-layer'
+
+    useEffect(() => {
+        // Get map instance - try multiple ways
+        let map = mapInstance
+
+        if (!map && mapContext) {
+            // Try to get from useMap hook
+            if (mapContext.current) {
+                map = mapContext.current
+            } else if (typeof mapContext === 'object' && 'getMap' in mapContext) {
+                map = mapContext.getMap()
+            } else if (typeof mapContext.addSource === 'function') {
+                // Direct map instance
+                map = mapContext
+            }
+        }
+
+        if (!map || !visible) {
+            // Remove layer if map exists and overlay is hidden
+            if (map && typeof map.getLayer === 'function') {
+                try {
+                    if (map.getLayer(layerId)) {
+                        map.removeLayer(layerId)
+                    }
+                    if (map.getSource(sourceId)) {
+                        map.removeSource(sourceId)
+                    }
+                    if (map.hasImage && map.hasImage(imageId)) {
+                        map.removeImage(imageId)
+                    }
+                } catch (error) {
+                    console.warn('Error removing radar layer:', error)
+                }
+            }
+            return
+        }
+
+        // Check if map is ready and has the required methods
+        if (typeof map.addSource !== 'function' || typeof map.addLayer !== 'function') {
+            console.warn('Map instance is not ready or does not have required methods', map)
+            return
+        }
+
+        // Fetch and add radar image
+        const loadRadarImage = async () => {
+            try {
+                // Sử dụng proxy endpoint để tránh Mixed Content error
+                const imageUrl = `${RADAR_API_URL}?offset=${offset}`
+
+                // Fetch image as blob
+                const response = await fetch(imageUrl)
+                if (!response.ok) {
+                    throw new Error(`Failed to fetch radar image: ${response.statusText}`)
+                }
+
+                const blob = await response.blob()
+                const imageUrlObject = URL.createObjectURL(blob)
+
+                // Create image element using window.Image to avoid conflict with antd Image component
+                const img = new window.Image()
+                img.crossOrigin = 'anonymous'
+
+                img.onload = () => {
+                    try {
+                        // Ensure map is still ready
+                        if (!map || typeof map.addSource !== 'function') {
+                            console.error('Map is not ready')
+                            return
+                        }
+
+                        // Remove existing layer/source/image if they exist
+                        if (map.getLayer(layerId)) {
+                            map.removeLayer(layerId)
+                        }
+                        if (map.getSource(sourceId)) {
+                            map.removeSource(sourceId)
+                        }
+                        if (map.hasImage && map.hasImage(imageId)) {
+                            map.removeImage(imageId)
+                        }
+
+                        // Add image to map
+                        map.addImage(imageId, img)
+
+                        // Add image source
+                        map.addSource(sourceId, {
+                            type: 'image',
+                            url: imageUrlObject,
+                            coordinates: VIETNAM_BOUNDS
+                        })
+
+                        // Add raster layer
+                        map.addLayer({
+                            id: layerId,
+                            type: 'raster',
+                            source: sourceId,
+                            paint: {
+                                'raster-opacity': 0.7, // Adjust opacity for better visibility
+                                'raster-fade-duration': 0
+                            }
+                        })
+
+                        // Clean up object URL after a delay
+                        setTimeout(() => {
+                            URL.revokeObjectURL(imageUrlObject)
+                        }, 1000)
+                    } catch (error) {
+                        console.error('Error adding radar layer to map:', error)
+                        message.error('Không thể tải lớp radar. Vui lòng thử lại.')
+                    }
+                }
+
+                img.onerror = () => {
+                    console.error('Error loading radar image')
+                    message.error('Không thể tải ảnh radar. Vui lòng kiểm tra kết nối.')
+                    URL.revokeObjectURL(imageUrlObject)
+                }
+
+                img.src = imageUrlObject
+            } catch (error) {
+                console.error('Error fetching radar image:', error)
+                message.error('Không thể tải dữ liệu radar. Vui lòng thử lại sau.')
+            }
+        }
+
+        // Wait for map style to load before adding layers
+        const waitForMapReady = () => {
+            if (map.isStyleLoaded && !map.isStyleLoaded()) {
+                map.once('style.load', () => {
+                    loadRadarImage()
+                })
+            } else {
+                loadRadarImage()
+            }
+        }
+
+        waitForMapReady()
+
+        // Auto-refresh radar image every 2 minutes (120000ms)
+        let refreshInterval = null
+        if (visible && map) {
+            refreshInterval = setInterval(() => {
+                if (map && typeof map.addSource === 'function') {
+                    console.log('🔄 Tự động làm mới dữ liệu radar...')
+                    loadRadarImage()
+                }
+            }, 120000) // 2 minutes = 120000 milliseconds
+        }
+
+        // Cleanup function
+        return () => {
+            // Clear refresh interval
+            if (refreshInterval) {
+                clearInterval(refreshInterval)
+            }
+
+            try {
+                if (map && typeof map.getLayer === 'function') {
+                    if (map.getLayer(layerId)) {
+                        map.removeLayer(layerId)
+                    }
+                    if (map.getSource(sourceId)) {
+                        map.removeSource(sourceId)
+                    }
+                    if (map.hasImage && map.hasImage(imageId)) {
+                        map.removeImage(imageId)
+                    }
+                }
+            } catch (error) {
+                console.warn('Error cleaning up radar layer:', error)
+            }
+        }
+    }, [mapContext, visible, offset, mapInstance])
+
+    return null // This component doesn't render anything
+}
 
 // Trong production (Docker), VITE_API_URL có thể là empty để dùng relative path /api (nginx proxy)
 // Trong development, dùng localhost:5000
@@ -21,6 +249,11 @@ const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN || import.meta.env.REACT_
 if (!MAPBOX_TOKEN && process.env.NODE_ENV === 'development') {
     console.warn('⚠️ MAPBOX_TOKEN không được tìm thấy trong environment variables')
 }
+
+// Radar API configuration - Sử dụng proxy endpoint để tránh Mixed Content error
+// Proxy endpoint sẽ fetch từ HTTP API và trả về qua HTTPS
+// Phải định nghĩa sau API_URL
+const RADAR_API_URL = `${API_URL}/api/radar/image`
 
 // Mapping các thông số thủy điện sang tiếng Việt dễ hiểu
 const THUYDIEN_PARAM_LABELS = {
@@ -39,15 +272,22 @@ function MapPage() {
     const navigate = useNavigate()
     const location = useLocation()
     const [safePoints, setSafePoints] = useState([])
+    const [reliefPoints, setReliefPoints] = useState([]) // Điểm tiếp nhận cứu trợ
     // Flood areas đã bị loại bỏ - không còn sử dụng
     // const [floodAreas, setFloodAreas] = useState([])
     const [rescueRequests, setRescueRequests] = useState([])
+    const [supportRequests, setSupportRequests] = useState([]) // Yêu cầu hỗ trợ
+    const [geoFeatures, setGeoFeatures] = useState([]) // GeoFeatures từ admin
+    const [showGeoFeatures, setShowGeoFeatures] = useState(true) // Toggle hiển thị GeoFeatures
+    const [selectedGeoFeature, setSelectedGeoFeature] = useState(null) // GeoFeature được chọn
+    const [selectedSupportRequest, setSelectedSupportRequest] = useState(null) // SupportRequest được chọn
     const [selectedPoint, setSelectedPoint] = useState(null)
     const [selectedRescue, setSelectedRescue] = useState(null)
     const [selectedListItem, setSelectedListItem] = useState(null) // Item được chọn trong sidebar
     const [loading, setLoading] = useState(true)
     const [searchText, setSearchText] = useState('')
-    const [activeFilter, setActiveFilter] = useState('all') // 'all', 'rescue', 'safe', 'thuydien', 'waterlevel'
+    const [activeFilter, setActiveFilter] = useState('all') // 'all', 'rescue', 'safe', 'relief', 'thuydien', 'waterlevel', 'news', 'geofeatures', 'support'
+    const [sidebarPagination, setSidebarPagination] = useState({ current: 1, pageSize: 20 }) // Pagination cho sidebar list
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
     const [sidebarOpen, setSidebarOpen] = useState(false) // Mobile sidebar state
     const [isMobile, setIsMobile] = useState(window.innerWidth <= 768)
@@ -70,6 +310,20 @@ function MapPage() {
     const [quickRescueImageFile, setQuickRescueImageFile] = useState(null)
     const [quickRescueLoading, setQuickRescueLoading] = useState(false)
 
+    // Support request form states
+    const [supportRequestModalVisible, setSupportRequestModalVisible] = useState(false)
+    const [supportRequestForm] = Form.useForm()
+    const [supportRequestLocation, setSupportRequestLocation] = useState(null) // { lat, lng }
+    const [supportRequestImageFile, setSupportRequestImageFile] = useState(null)
+    const [supportRequestLoading, setSupportRequestLoading] = useState(false)
+    const [supportRequestGoogleMapsUrl, setSupportRequestGoogleMapsUrl] = useState('')
+    const [supportRequestParsedCoords, setSupportRequestParsedCoords] = useState(null)
+
+    // Hotline states
+    const [hotlines, setHotlines] = useState([])
+    const [hotlineModalVisible, setHotlineModalVisible] = useState(false)
+    const [hotlineLoading, setHotlineLoading] = useState(false)
+
     // Location picker modal states
     const [locationPickerModalVisible, setLocationPickerModalVisible] = useState(false)
     const [locationPickerMapType, setLocationPickerMapType] = useState('streets') // 'streets' or 'satellite'
@@ -85,7 +339,15 @@ function MapPage() {
     const [addRescueTeamForm] = Form.useForm()
     const [addRescueTeamLocation, setAddRescueTeamLocation] = useState(null) // { lat, lng }
     const [addRescueTeamLoading, setAddRescueTeamLoading] = useState(false)
-    const [locationPickerContext, setLocationPickerContext] = useState(null) // 'quickRescue' | 'addRescueTeam' | null
+
+    // Add relief point form states
+    const [addReliefPointModalVisible, setAddReliefPointModalVisible] = useState(false)
+    const [addReliefPointForm] = Form.useForm()
+    const [addReliefPointLocation, setAddReliefPointLocation] = useState(null) // { lat, lng }
+    const [addReliefPointLoading, setAddReliefPointLoading] = useState(false)
+    const [addReliefPointGoogleMapsUrl, setAddReliefPointGoogleMapsUrl] = useState('')
+    const [addReliefPointParsedCoords, setAddReliefPointParsedCoords] = useState(null)
+    const [locationPickerContext, setLocationPickerContext] = useState(null) // 'quickRescue' | 'addRescueTeam' | 'addReliefPoint' | null
 
     // Water level stations states
     const [waterLevelStations, setWaterLevelStations] = useState([])
@@ -96,17 +358,47 @@ function MapPage() {
     const [thuydienData, setThuydienData] = useState({})
     const [selectedThuydien, setSelectedThuydien] = useState(null) // { slug, name, coordinates, data }
 
+    // Tin tức states
+    const [news, setNews] = useState([])
+
+    // Cluster modal states
+    const [clusterModalVisible, setClusterModalVisible] = useState(false)
+    const [clusterRequests, setClusterRequests] = useState([]) // Danh sách requests trong cluster
+
+    // Radar overlay states
+    const [radarOverlayVisible, setRadarOverlayVisible] = useState(false)
+    const [radarImageLoaded, setRadarImageLoaded] = useState(false)
+    const mapInstanceRef = useRef(null)
+    const [radarUnit, setRadarUnit] = useState('dBZ') // 'dBZ' hoặc 'mm/h'
+
+    // Giá trị hiển thị theo đơn vị - sử dụng constants đã định nghĩa ngoài component
+    const radarDisplayValues = useMemo(() => {
+        return radarUnit === 'dBZ' ? DBZ_VALUES : MMH_VALUES
+    }, [radarUnit])
+
+    // News detail modal states
+    const [newsDetailModalVisible, setNewsDetailModalVisible] = useState(false)
+    const [selectedNewsItem, setSelectedNewsItem] = useState(null)
+    const [expandedNewsItems, setExpandedNewsItems] = useState(new Set()) // Track expanded news items
+
     // Load dữ liệu từ API hoặc dùng fallback
     useEffect(() => {
         const fetchData = async () => {
             try {
-                const [safeRes, rescueRes] = await Promise.all([
+                const [safeRes, reliefRes, rescueRes, geoFeaturesRes, supportRes, hotlinesRes] = await Promise.all([
                     axios.get(`${API_URL}/api/safe-points`),
-                    axios.get(`${API_URL}/api/rescue-requests`)
+                    axios.get(`${API_URL}/api/relief-points`).catch(() => ({ data: { success: false } })), // Load relief points
+                    axios.get(`${API_URL}/api/rescue-requests?limit=10000`),
+                    axios.get(`${API_URL}/api/geo-features?limit=500&status=Hoạt động`).catch(() => ({ data: { success: false } })), // Chỉ load features đang hoạt động, limit 500 để tối ưu
+                    axios.get(`${API_URL}/api/support-requests?limit=10000`).catch(() => ({ data: { success: false } })), // Load support requests
+                    axios.get(`${API_URL}/api/hotlines`).catch(() => ({ data: { success: false } })) // Load hotlines
                 ])
 
                 if (safeRes.data && safeRes.data.success && Array.isArray(safeRes.data.data)) {
                     setSafePoints(safeRes.data.data)
+                }
+                if (reliefRes.data && reliefRes.data.success && Array.isArray(reliefRes.data.data)) {
+                    setReliefPoints(reliefRes.data.data)
                 }
                 // Flood areas đã bị loại bỏ - không còn fetch
                 if (rescueRes.data && rescueRes.data.success && Array.isArray(rescueRes.data.data)) {
@@ -125,6 +417,34 @@ function MapPage() {
                             setSelectedListItem(focusReq._id || focusReq.id)
                         }
                     }
+                }
+
+                // Load GeoFeatures
+                if (geoFeaturesRes.data && geoFeaturesRes.data.success && Array.isArray(geoFeaturesRes.data.data)) {
+                    devLog('✅ Fetched GeoFeatures:', geoFeaturesRes.data.data.length, 'features');
+                    setGeoFeatures(geoFeaturesRes.data.data);
+                } else {
+                    devLog('⚠️ No GeoFeatures data or API error');
+                    console.log('GeoFeatures API response:', geoFeaturesRes.data);
+                    setGeoFeatures([]); // Set empty array to clear any old data
+                }
+
+                // Load SupportRequests
+                if (supportRes.data && supportRes.data.success && Array.isArray(supportRes.data.data)) {
+                    devLog('✅ Fetched SupportRequests:', supportRes.data.data.length, 'requests');
+                    setSupportRequests(supportRes.data.data);
+                } else {
+                    devLog('⚠️ No SupportRequests data or API error');
+                    setSupportRequests([]);
+                }
+
+                // Load Hotlines
+                if (hotlinesRes.data && hotlinesRes.data.success && Array.isArray(hotlinesRes.data.data)) {
+                    devLog('✅ Fetched Hotlines:', hotlinesRes.data.data.length, 'hotlines');
+                    setHotlines(hotlinesRes.data.data);
+                } else {
+                    devLog('⚠️ No Hotlines data or API error');
+                    setHotlines([]);
                 }
             } catch (error) {
                 console.log('Không thể kết nối API, sử dụng dữ liệu offline')
@@ -175,25 +495,114 @@ function MapPage() {
         }
         fetchThuydienData()
 
-        // Refresh thủy điện data mỗi 1 phút
-        const thuydienInterval = setInterval(fetchThuydienData, 60 * 1000)
-
-        // Refresh rescue requests mỗi 10 giây
-        const interval = setInterval(async () => {
+        // Fetch tin tức
+        const fetchNews = async () => {
             try {
-                const rescueRes = await axios.get(`${API_URL}/api/rescue-requests`)
-                if (rescueRes.data && rescueRes.data.success && Array.isArray(rescueRes.data.data)) {
-                    setRescueRequests(rescueRes.data.data)
+                const response = await axios.get(`${API_URL}/api/news?limit=100`)
+                if (response.data && response.data.success && Array.isArray(response.data.data)) {
+                    setNews(response.data.data)
                 }
             } catch (error) {
-                console.log('Không thể refresh cầu cứu:', error.message)
-                // Không set state để giữ nguyên dữ liệu cũ
+                console.error('Lỗi lấy dữ liệu tin tức:', error)
             }
-        }, 10000)
+        }
+        fetchNews()
+
+        // Tối ưu hiệu năng: Sử dụng Page Visibility API và dynamic intervals
+        let rescueInterval = null
+        let thuydienInterval = null
+        let newsInterval = null
+        let abortController = null
+
+        // Hash để so sánh data có thay đổi không (tránh re-render không cần thiết)
+        let lastRescueDataHash = ''
+
+        const createDataHash = (data) => {
+            if (!data || data.length === 0) return ''
+            // Tạo hash đơn giản từ length và một vài ID đầu tiên
+            return `${data.length}-${data.slice(0, 5).map((item) => item._id || item.id).join(',')}`
+        }
+
+        const fetchRescueRequestsOptimized = async () => {
+            // Chỉ fetch khi tab visible
+            if (document.hidden) return
+
+            try {
+                // Tạo AbortController mới cho mỗi request
+                abortController = new AbortController()
+
+                const rescueRes = await axios.get(`${API_URL}/api/rescue-requests?limit=10000`, {
+                    signal: abortController.signal
+                })
+
+                if (rescueRes.data && rescueRes.data.success && Array.isArray(rescueRes.data.data)) {
+                    const newHash = createDataHash(rescueRes.data.data)
+                    // Chỉ update state nếu data thực sự thay đổi
+                    if (newHash !== lastRescueDataHash) {
+                        setRescueRequests(rescueRes.data.data)
+                        lastRescueDataHash = newHash
+                    }
+                }
+            } catch (error) {
+                // Ignore AbortError (khi cancel request)
+                if (error.name !== 'AbortError' && error.name !== 'CanceledError') {
+                    console.log('Không thể refresh cầu cứu:', error.message)
+                }
+            }
+        }
+
+        const setupIntervals = () => {
+            // Clear intervals cũ nếu có
+            if (rescueInterval) clearInterval(rescueInterval)
+            if (thuydienInterval) clearInterval(thuydienInterval)
+            if (newsInterval) clearInterval(newsInterval)
+
+            // Dynamic interval: nhanh hơn khi tab visible, chậm hơn khi hidden
+            const isVisible = !document.hidden
+            const rescueIntervalTime = isVisible ? 30000 : 120000 // 30s khi visible, 2 phút khi hidden
+            const thuydienIntervalTime = isVisible ? 120000 : 300000 // 2 phút khi visible, 5 phút khi hidden  
+            const newsIntervalTime = isVisible ? 300000 : 600000 // 5 phút khi visible, 10 phút khi hidden
+
+            // Refresh rescue requests với interval động
+            rescueInterval = setInterval(fetchRescueRequestsOptimized, rescueIntervalTime)
+
+            // Refresh thủy điện data với interval động
+            thuydienInterval = setInterval(() => {
+                if (!document.hidden) {
+                    fetchThuydienData()
+                }
+            }, thuydienIntervalTime)
+
+            // Refresh news với interval động
+            newsInterval = setInterval(() => {
+                if (!document.hidden) {
+                    fetchNews()
+                }
+            }, newsIntervalTime)
+        }
+
+        // Setup intervals ban đầu
+        setupIntervals()
+
+        // Lắng nghe sự kiện visibility change để điều chỉnh intervals
+        const handleVisibilityChange = () => {
+            setupIntervals()
+            // Fetch ngay khi tab trở lại visible
+            if (!document.hidden) {
+                fetchRescueRequestsOptimized()
+            }
+        }
+        document.addEventListener('visibilitychange', handleVisibilityChange)
 
         return () => {
-            clearInterval(interval)
-            clearInterval(thuydienInterval)
+            if (rescueInterval) clearInterval(rescueInterval)
+            if (thuydienInterval) clearInterval(thuydienInterval)
+            if (newsInterval) clearInterval(newsInterval)
+            document.removeEventListener('visibilitychange', handleVisibilityChange)
+            // Cancel pending requests
+            if (abortController) {
+                abortController.abort()
+            }
         }
     }, [location.state])
 
@@ -258,7 +667,37 @@ function MapPage() {
     const handleRescueClick = useCallback((request) => {
         setSelectedRescue(request)
         setSelectedPoint(null)
+        setSelectedSupportRequest(null)
+        setSelectedGeoFeature(null)
         setSelectedListItem(request._id || request.id) // Highlight trong sidebar
+    }, [])
+
+    // Xử lý click support request marker
+    const handleSupportRequestClick = useCallback((request) => {
+        console.log('🔵 Support request clicked:', request)
+        console.log('🔵 Location:', request.location)
+        console.log('🔵 Location type check:', {
+            hasLocation: !!request.location,
+            hasLat: request.location?.lat != null,
+            hasLng: request.location?.lng != null,
+            lat: request.location?.lat,
+            lng: request.location?.lng
+        })
+        setSelectedSupportRequest(request)
+        setSelectedRescue(null)
+        setSelectedPoint(null)
+        setSelectedGeoFeature(null)
+        setSelectedListItem(request._id || request.id) // Highlight trong sidebar
+
+        // Điều hướng map đến vị trí của request
+        if (request.location && request.location.lat != null && request.location.lng != null) {
+            setViewState(prev => ({
+                ...prev,
+                longitude: request.location.lng,
+                latitude: request.location.lat,
+                zoom: Math.max(prev.zoom, 14)
+            }))
+        }
     }, [])
 
     // Xử lý click water level station marker - mở modal trực tiếp
@@ -321,16 +760,43 @@ function MapPage() {
 
     // Xử lý click cluster marker
     const handleClusterClick = useCallback((cluster) => {
-        const expansionZoom = Math.min(
-            clusterRef.current?.getClusterExpansionZoom(cluster.id) || viewState.zoom + 2,
-            18
-        )
-        setViewState(prev => ({
-            ...prev,
-            longitude: cluster.geometry.coordinates[0],
-            latitude: cluster.geometry.coordinates[1],
-            zoom: expansionZoom
-        }))
+        // Lấy tất cả các điểm (requests) trong cluster
+        if (clusterRef.current && cluster.properties.cluster) {
+            const leaves = clusterRef.current.getLeaves(cluster.id, Infinity) // Infinity để lấy tất cả
+            const requests = leaves
+                .map(leaf => leaf.properties.request)
+                .filter(req => req !== null && req !== undefined)
+
+            if (requests.length > 0) {
+                // Hiển thị modal với danh sách requests
+                setClusterRequests(requests)
+                setClusterModalVisible(true)
+            } else {
+                // Nếu không lấy được requests, vẫn zoom như cũ
+                const expansionZoom = Math.min(
+                    clusterRef.current?.getClusterExpansionZoom(cluster.id) || viewState.zoom + 2,
+                    18
+                )
+                setViewState(prev => ({
+                    ...prev,
+                    longitude: cluster.geometry.coordinates[0],
+                    latitude: cluster.geometry.coordinates[1],
+                    zoom: expansionZoom
+                }))
+            }
+        } else {
+            // Fallback: zoom vào cluster
+            const expansionZoom = Math.min(
+                clusterRef.current?.getClusterExpansionZoom(cluster.id) || viewState.zoom + 2,
+                18
+            )
+            setViewState(prev => ({
+                ...prev,
+                longitude: cluster.geometry.coordinates[0],
+                latitude: cluster.geometry.coordinates[1],
+                zoom: expansionZoom
+            }))
+        }
     }, [viewState.zoom])
 
     // Xử lý click item trong sidebar
@@ -429,7 +895,11 @@ function MapPage() {
                 // Tab "Đội cứu" → KHÔNG hiển thị rescue requests
                 return false
             }
-            // activeFilter === 'all' → hiển thị tất cả
+            if (activeFilter === 'news') {
+                // Tab "Tin tức mới" → vẫn hiển thị tất cả rescue requests trên bản đồ (tin tức không liên quan bản đồ)
+                return true
+            }
+            // activeFilter === 'all' hoặc các filter khác → hiển thị tất cả
             return true
         })
 
@@ -489,6 +959,81 @@ function MapPage() {
         return filtered
     }, [safePoints, debouncedSearchText, activeFilter])
 
+    // Filter relief points cho sidebar khi activeFilter === 'relief'
+    const filteredReliefPoints = useMemo(() => {
+        if (activeFilter !== 'relief') return []
+
+        let filtered = reliefPoints
+
+        // Filter theo search text
+        if (debouncedSearchText) {
+            const searchLower = debouncedSearchText.toLowerCase()
+            filtered = filtered.filter(point => {
+                return (
+                    point.name?.toLowerCase().includes(searchLower) ||
+                    point.address?.toLowerCase().includes(searchLower) ||
+                    point.contactPerson?.toLowerCase().includes(searchLower) ||
+                    point.reliefType?.toLowerCase().includes(searchLower)
+                )
+            })
+        }
+
+        return filtered
+    }, [reliefPoints, debouncedSearchText, activeFilter])
+
+    // Filter support requests cho sidebar khi activeFilter === 'support'
+    const filteredSupportRequests = useMemo(() => {
+        if (activeFilter !== 'support') return []
+
+        let filtered = supportRequests
+
+        // Filter theo search text
+        if (debouncedSearchText) {
+            const searchLower = debouncedSearchText.toLowerCase()
+            filtered = filtered.filter(request => {
+                const searchableText = [
+                    request.name || '',
+                    request.description || '',
+                    request.phone || '',
+                    (request.needs || []).join(' ')
+                ].join(' ').toLowerCase()
+                return searchableText.includes(searchLower)
+            })
+        }
+
+        return filtered
+    }, [supportRequests, debouncedSearchText, activeFilter])
+
+    // Filter news theo search text
+    const filteredNews = useMemo(() => {
+        if (activeFilter !== 'news') return []
+
+        let filtered = news
+
+        // Filter theo search text
+        if (debouncedSearchText) {
+            const searchLower = debouncedSearchText.toLowerCase()
+            const searchWords = searchLower.split(/\s+/).filter(word => word.length > 0)
+
+            filtered = filtered.filter(item => {
+                const searchableText = [
+                    item.title || '',
+                    item.content || '',
+                    item.author || '',
+                    item.category || ''
+                ].join(' ').toLowerCase()
+
+                if (searchWords.length > 1) {
+                    return searchWords.every(word => searchableText.includes(word))
+                } else {
+                    return searchableText.includes(searchLower)
+                }
+            })
+        }
+
+        return filtered
+    }, [news, debouncedSearchText, activeFilter])
+
     // Dữ liệu hiển thị trong sidebar
     const sidebarItems = useMemo(() => {
         if (activeFilter === 'safe') {
@@ -512,6 +1057,38 @@ function MapPage() {
                     people: point.capacity ? `Sức chứa: ${point.capacity} người` : (point.type === 'Đội cứu hộ' ? 'Đội cứu hộ' : 'Sức chứa không rõ'),
                     needs: point.type === 'Đội cứu hộ' ? (point.rescueType || 'Đội cứu hộ') : 'Điểm trú ẩn an toàn',
                     type: 'safe',
+                    timestamp: point.createdAt || point.updatedAt || new Date(),
+                    point: point // Lưu object gốc
+                }))
+        }
+        if (activeFilter === 'relief') {
+            // Tab "Cứu trợ" → hiển thị relief points (điểm tiếp nhận cứu trợ)
+            return filteredReliefPoints
+                .filter(point => point && (point._id || point.id))
+                .map(point => ({
+                    id: point._id || point.id,
+                    _id: point._id || point.id,
+                    location: point.name || 'Không có tên',
+                    description: point.description || point.address || '',
+                    address: point.address || '',
+                    contact: point.phone || null,
+                    contactFull: point.phone || null,
+                    contactPerson: point.contactPerson || null,
+                    reliefType: point.reliefType || null,
+                    pointType: point.type || 'Điểm tiếp nhận cứu trợ', // Loại điểm (Điểm tập kết, Kho hàng, etc.)
+                    capacity: point.capacity || 0,
+                    currentOccupancy: point.currentOccupancy || 0,
+                    operatingHours: point.operatingHours || null,
+                    coords: (typeof point.lng === 'number' && typeof point.lat === 'number' &&
+                        !isNaN(point.lng) && !isNaN(point.lat) &&
+                        point.lng >= -180 && point.lng <= 180 && point.lat >= -90 && point.lat <= 90)
+                        ? [point.lng, point.lat] : null,
+                    urgency: point.status === 'Đầy' ? 'ĐẦY' : point.status === 'Hoạt động' ? 'HOẠT ĐỘNG' : point.status || 'HOẠT ĐỘNG',
+                    people: point.capacity > 0
+                        ? `${point.currentOccupancy || 0}/${point.capacity} người`
+                        : 'Không giới hạn',
+                    needs: Array.isArray(point.reliefType) ? point.reliefType.join(', ') : (point.reliefType || 'Hỗn hợp'),
+                    type: 'relief', // Loại item trong sidebar (relief, safe, rescue, etc.)
                     timestamp: point.createdAt || point.updatedAt || new Date(),
                     point: point // Lưu object gốc
                 }))
@@ -566,34 +1143,142 @@ function MapPage() {
                     station: station // Lưu object gốc
                 }))
         }
+        if (activeFilter === 'news') {
+            // Tab "Tin tức mới" → hiển thị tin tức
+            return filteredNews.map(item => ({
+                id: item._id,
+                _id: item._id,
+                title: item.title || '',
+                content: item.content || '',
+                imagePath: item.imagePath || null,
+                imageUrl: item.imagePath ? (item.imagePath.startsWith('http') ? item.imagePath : `${API_URL}${item.imagePath}`) : null,
+                sourceUrl: item.sourceUrl || null,
+                category: item.category || 'cập nhật tình hình',
+                author: item.author || 'Admin',
+                views: item.views || 0,
+                type: 'news',
+                timestamp: item.createdAt || new Date(),
+                news: item // Lưu object gốc
+            }))
+        }
+        if (activeFilter === 'geofeatures') {
+            // Tab "Đối tượng bản đồ" → hiển thị GeoFeatures
+            let filtered = geoFeatures.filter(feature => {
+                if (!feature || !feature.properties) return false
+
+                // Filter theo search text nếu có
+                if (debouncedSearchText) {
+                    const searchLower = debouncedSearchText.toLowerCase()
+                    const searchableText = [
+                        feature.properties.name || '',
+                        feature.properties.category || '',
+                        feature.properties.description || '',
+                        feature.properties.status || ''
+                    ].join(' ').toLowerCase()
+                    return searchableText.includes(searchLower)
+                }
+                return true
+            })
+
+            return filtered.map(feature => {
+                // Tính toán tọa độ trung tâm dựa trên geometry type
+                let centerCoords = null
+                if (feature.geometry) {
+                    if (feature.geometry.type === 'Point') {
+                        centerCoords = feature.geometry.coordinates // [lng, lat]
+                    } else if (feature.geometry.type === 'LineString') {
+                        const coords = feature.geometry.coordinates
+                        const midIndex = Math.floor(coords.length / 2)
+                        centerCoords = coords[midIndex] // [lng, lat]
+                    } else if (feature.geometry.type === 'Polygon') {
+                        const ring = feature.geometry.coordinates[0]
+                        const midIndex = Math.floor(ring.length / 2)
+                        centerCoords = ring[midIndex] // [lng, lat]
+                    }
+                }
+
+                return {
+                    id: feature.properties?.id || feature._id,
+                    _id: feature.properties?.id || feature._id,
+                    location: feature.properties?.name || feature.properties?.category || 'Không có tên',
+                    description: feature.properties?.description || '',
+                    category: feature.properties?.category || '',
+                    status: feature.properties?.status || '',
+                    severity: feature.properties?.severity || '',
+                    color: feature.properties?.color || '#ff0000',
+                    coords: centerCoords,
+                    type: 'geofeature',
+                    geometryType: feature.geometry?.type || '',
+                    timestamp: feature.createdAt || feature.updatedAt || new Date(),
+                    geoFeature: feature // Lưu object gốc
+                }
+            })
+        }
+        if (activeFilter === 'support') {
+            // Tab "Hỗ trợ" → hiển thị support requests (yêu cầu hỗ trợ)
+            return filteredSupportRequests
+                .filter(request => request && (request._id || request.id) && request.location && request.location.lat != null && request.location.lng != null)
+                .map(request => ({
+                    id: request._id || request.id,
+                    _id: request._id || request.id,
+                    location: request.name || 'Yêu cầu hỗ trợ',
+                    description: request.description || '',
+                    name: request.name || 'Yêu cầu hỗ trợ',
+                    phone: request.phone || null,
+                    needs: request.needs || [],
+                    peopleCount: request.peopleCount || null,
+                    status: request.status || 'Chưa xử lý',
+                    coords: (typeof request.location.lng === 'number' && typeof request.location.lat === 'number' &&
+                        !isNaN(request.location.lng) && !isNaN(request.location.lat) &&
+                        request.location.lng >= -180 && request.location.lng <= 180 && request.location.lat >= -90 && request.location.lat <= 90)
+                        ? [request.location.lng, request.location.lat] : null,
+                    type: 'support',
+                    timestamp: request.createdAt || request.updatedAt || new Date(),
+                    imagePath: request.imagePath || null,
+                    supportRequest: request // Lưu object gốc
+                }))
+        }
         // Tab "Cần cứu" hoặc "Tất cả" → hiển thị rescue requests (cầu cứu)
         return filteredRescueRequests
-    }, [activeFilter, filteredRescueRequests, filteredSafePoints, thuydienData, waterLevelStations])
+    }, [activeFilter, filteredRescueRequests, filteredSafePoints, filteredNews, filteredSupportRequests, thuydienData, waterLevelStations, geoFeatures, debouncedSearchText])
 
     // Tính số lượng cho filter buttons
     const filterCounts = useMemo(() => {
-        const total = rescueRequests.length
-        // Tab "Cần cứu" hiển thị TẤT CẢ rescue requests, không chỉ urgency khẩn cấp
         const rescue = rescueRequests.length
         const safe = safePoints.length
+        const relief = reliefPoints.length
+        const support = supportRequests.length
         const thuydien = Object.keys(thuydienData).length > 0 ? Object.keys(thuydienData).length : 2 // Fallback: 2 hồ thủy điện
         const waterlevel = waterLevelStations.length
+        const newsCount = news.length
+        const geoFeaturesCount = geoFeatures.length
+
+        // "Tất cả" bao gồm: rescue requests + safe points + relief points + support requests + geo features + thuydien + water level stations + news
+        const all = rescue + safe + relief + support + geoFeaturesCount + thuydien + waterlevel + newsCount
+
+        // Tab "Cần cứu" hiển thị TẤT CẢ rescue requests, không chỉ urgency khẩn cấp
+        const total = rescue // Giữ lại để tương thích với code cũ
+
         // Flood areas đã bị loại bỏ
-        return { total, rescue, safe, thuydien, waterlevel }
-    }, [rescueRequests, safePoints, thuydienData, waterLevelStations])
+        return { total, all, rescue, safe, relief, support, thuydien, waterlevel, news: newsCount, geoFeatures: geoFeaturesCount }
+    }, [rescueRequests, safePoints, reliefPoints, supportRequests, thuydienData, waterLevelStations, news, geoFeatures])
 
     // Clustering cho rescue requests - Tối ưu cho mobile
     const clusterRef = useRef(null)
     const pointsHashRef = useRef('') // Lưu hash của points để tránh reload không cần thiết
 
     const clusters = useMemo(() => {
-        // Chỉ cluster khi filter = all hoặc rescue
-        if (activeFilter !== 'all' && activeFilter !== 'rescue') {
+        // Cluster khi filter = all, rescue, hoặc news (tin tức không liên quan bản đồ nên vẫn hiển thị markers)
+        if (activeFilter !== 'all' && activeFilter !== 'rescue' && activeFilter !== 'news') {
             return []
         }
 
+        // Khi activeFilter === 'news', dùng tất cả rescueRequests (không filter) để đảm bảo markers luôn hiển thị
+        // Khi activeFilter === 'all' hoặc 'rescue', dùng filteredRescueRequests (có thể có search filter)
+        const requestsToCluster = activeFilter === 'news' ? rescueRequests : filteredRescueRequests
+
         // Lấy các rescue requests có tọa độ hợp lệ
-        const points = filteredRescueRequests
+        const points = requestsToCluster
             .filter(req => {
                 if (!req || !req.coords || !Array.isArray(req.coords) || req.coords.length < 2) {
                     return false
@@ -703,62 +1388,9 @@ function MapPage() {
     }
 
 
-    // Parse tọa độ từ Google Maps URL
+    // Parse tọa độ từ Google Maps URL (tự động chuyển đổi GCJ-02 → WGS84)
     const parseGoogleMapsCoords = (url) => {
-        if (!url || typeof url !== 'string') return null
-
-        try {
-            // Format 1: https://www.google.com/maps?q=lat,lng
-            let match = url.match(/[?&]q=([^&]+)/)
-            if (match) {
-                const coords = match[1].split(',')
-                if (coords.length >= 2) {
-                    const lat = parseFloat(coords[0].trim())
-                    const lng = parseFloat(coords[1].trim())
-                    if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-                        return [lng, lat] // Trả về [longitude, latitude] theo format của hệ thống
-                    }
-                }
-            }
-
-            // Format 2: https://www.google.com/maps/@lat,lng,zoom
-            match = url.match(/@(-?\d+\.?\d*),(-?\d+\.?\d*)/)
-            if (match) {
-                const lat = parseFloat(match[1])
-                const lng = parseFloat(match[2])
-                if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-                    return [lng, lat]
-                }
-            }
-
-            // Format 3: https://maps.google.com/?q=lat,lng
-            match = url.match(/[?&]q=([^&]+)/)
-            if (match) {
-                const coords = match[1].split(',')
-                if (coords.length >= 2) {
-                    const lat = parseFloat(coords[0].trim())
-                    const lng = parseFloat(coords[1].trim())
-                    if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-                        return [lng, lat]
-                    }
-                }
-            }
-
-            // Format 4: https://www.google.com/maps/place/.../@lat,lng,zoom
-            match = url.match(/\/place\/[^@]+@(-?\d+\.?\d*),(-?\d+\.?\d*)/)
-            if (match) {
-                const lat = parseFloat(match[1])
-                const lng = parseFloat(match[2])
-                if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-                    return [lng, lat]
-                }
-            }
-
-            return null
-        } catch (error) {
-            console.error('Lỗi parse Google Maps URL:', error)
-            return null
-        }
+        return parseAndConvertGoogleMapsCoords(url, { outputFormat: 'lnglat' });
     }
 
     // Xử lý khi Google Maps link thay đổi
@@ -789,14 +1421,297 @@ function MapPage() {
         setIsUpdating(false) // Reset loading state
     }
 
+    // Setup GeoFeatures layers
+    const setupGeoFeaturesLayers = useCallback((mapInstance) => {
+        if (!mapInstance) {
+            devWarn('⚠️ setupGeoFeaturesLayers: mapInstance is null');
+            return;
+        }
+
+        // Wait for map style to load
+        if (!mapInstance.isStyleLoaded || !mapInstance.isStyleLoaded()) {
+            devLog('⏳ Map style not loaded yet, waiting...');
+            mapInstance.once('style.load', () => {
+                devLog('✅ Map style loaded, setting up GeoFeatures layers');
+                setupGeoFeaturesLayers(mapInstance);
+            });
+            return;
+        }
+
+        const sourceId = 'geo-features-source';
+        const layers = {
+            polygon: 'geo-features-polygon',
+            polygonOutline: 'geo-features-polygon-outline',
+            line: 'geo-features-line',
+            point: 'geo-features-point'
+        };
+
+        // Remove existing layers and source if they exist
+        try {
+            if (mapInstance.getLayer(layers.polygon)) mapInstance.removeLayer(layers.polygon);
+            if (mapInstance.getLayer(layers.polygonOutline)) mapInstance.removeLayer(layers.polygonOutline);
+            if (mapInstance.getLayer(layers.line)) mapInstance.removeLayer(layers.line);
+            if (mapInstance.getLayer(layers.point)) mapInstance.removeLayer(layers.point);
+            if (mapInstance.getSource(sourceId)) mapInstance.removeSource(sourceId);
+        } catch (err) {
+            // Ignore if doesn't exist
+        }
+
+        try {
+            // Add source
+            mapInstance.addSource(sourceId, {
+                type: 'geojson',
+                data: {
+                    type: 'FeatureCollection',
+                    features: []
+                }
+            });
+
+            // Find a suitable layer to insert before (prefer labels layer)
+            let beforeId = null;
+            try {
+                // Try to find a label layer to insert before
+                const style = mapInstance.getStyle();
+                if (style && style.layers) {
+                    const labelLayer = style.layers.find(layer =>
+                        layer.id && (layer.id.includes('label') || layer.id.includes('symbol'))
+                    );
+                    if (labelLayer) {
+                        beforeId = labelLayer.id;
+                    }
+                }
+            } catch (err) {
+                // If can't find, add at the end
+            }
+
+            // Add polygon fill layer (before outline để outline hiển thị trên fill)
+            mapInstance.addLayer({
+                id: layers.polygon,
+                type: 'fill',
+                source: sourceId,
+                filter: ['==', '$type', 'Polygon'],
+                paint: {
+                    'fill-color': ['coalesce', ['get', 'color'], '#ff0000'],
+                    'fill-opacity': 0.3
+                }
+            }, beforeId);
+
+            // Add polygon outline layer
+            mapInstance.addLayer({
+                id: layers.polygonOutline,
+                type: 'line',
+                source: sourceId,
+                filter: ['==', '$type', 'Polygon'],
+                paint: {
+                    'line-color': ['coalesce', ['get', 'color'], '#ff0000'],
+                    'line-width': 2
+                }
+            }, beforeId);
+
+            // Add line layer
+            mapInstance.addLayer({
+                id: layers.line,
+                type: 'line',
+                source: sourceId,
+                filter: ['==', '$type', 'LineString'],
+                paint: {
+                    'line-color': ['coalesce', ['get', 'color'], '#ff0000'],
+                    'line-width': 2
+                }
+            }, beforeId);
+
+            // Add point layer
+            mapInstance.addLayer({
+                id: layers.point,
+                type: 'circle',
+                source: sourceId,
+                filter: ['==', '$type', 'Point'],
+                paint: {
+                    'circle-color': ['coalesce', ['get', 'color'], '#ff0000'],
+                    'circle-radius': 6,
+                    'circle-stroke-width': 2,
+                    'circle-stroke-color': '#ffffff'
+                }
+            }, beforeId);
+
+            devLog('✅ GeoFeatures layers setup complete');
+        } catch (error) {
+            console.error('❌ Error setting up GeoFeatures layers:', error);
+        }
+    }, []);
+
+    // Load GeoFeatures to map
+    const loadGeoFeaturesToMap = useCallback(() => {
+        devLog('🔄 loadGeoFeaturesToMap called', {
+            hasMap: !!mapInstanceRef.current,
+            showGeoFeatures,
+            featuresCount: geoFeatures.length
+        });
+
+        if (!mapInstanceRef.current || !showGeoFeatures) {
+            // Clear features if hidden
+            if (mapInstanceRef.current) {
+                try {
+                    const sourceId = 'geo-features-source';
+                    if (mapInstanceRef.current.getSource(sourceId)) {
+                        mapInstanceRef.current.getSource(sourceId).setData({
+                            type: 'FeatureCollection',
+                            features: []
+                        });
+                    }
+                } catch (err) {
+                    // Ignore
+                }
+            }
+            return;
+        }
+
+        // Đảm bảo map style đã load
+        if (!mapInstanceRef.current.isStyleLoaded || !mapInstanceRef.current.isStyleLoaded()) {
+            devLog('⏳ Map style not loaded, waiting...');
+            mapInstanceRef.current.once('style.load', () => {
+                devLog('✅ Map style loaded, retrying loadGeoFeaturesToMap...');
+                setTimeout(() => {
+                    loadGeoFeaturesToMap();
+                }, 100);
+            });
+            return;
+        }
+
+        try {
+            const sourceId = 'geo-features-source';
+            const source = mapInstanceRef.current.getSource(sourceId);
+
+            if (!source) {
+                devLog('📝 Source not found, setting up layers...');
+                setupGeoFeaturesLayers(mapInstanceRef.current);
+                // Retry after setup
+                setTimeout(() => {
+                    loadGeoFeaturesToMap();
+                }, 200);
+                return;
+            }
+
+            // Convert geoFeatures to GeoJSON FeatureCollection - optimize
+            // Filter out invalid features and optimize color processing
+            const featuresForMap = geoFeatures
+                .filter(feature => {
+                    // Validate feature has required fields
+                    return feature &&
+                        feature.geometry &&
+                        feature.geometry.coordinates &&
+                        feature.properties &&
+                        feature.properties.id;
+                })
+                .map(feature => {
+                    let color = feature.properties?.color || '#ff0000';
+                    if (!color.startsWith('#')) color = '#' + color;
+                    if (color.length !== 7) color = '#ff0000';
+
+                    return {
+                        type: feature.type || 'Feature',
+                        geometry: feature.geometry,
+                        properties: {
+                            ...feature.properties,
+                            color: color,
+                            id: feature.properties.id
+                        }
+                    };
+                });
+
+            const featureCollection = {
+                type: 'FeatureCollection',
+                features: featuresForMap
+            };
+
+            devLog('📊 FeatureCollection:', {
+                featuresCount: featureCollection.features.length
+            });
+
+            // Update source data
+            if (mapInstanceRef.current.getSource(sourceId)) {
+                mapInstanceRef.current.getSource(sourceId).setData(featureCollection);
+                devLog('✅ GeoFeatures loaded to map:', featureCollection.features.length, 'features');
+            } else {
+                devLog('⚠️ Source still not found, retrying...');
+                setupGeoFeaturesLayers(mapInstanceRef.current);
+                setTimeout(() => {
+                    if (mapInstanceRef.current && mapInstanceRef.current.getSource(sourceId)) {
+                        mapInstanceRef.current.getSource(sourceId).setData(featureCollection);
+                        devLog('✅ GeoFeatures loaded to map (retry):', featureCollection.features.length, 'features');
+                    } else {
+                        console.error('❌ Failed to setup source after retry');
+                    }
+                }, 500);
+            }
+        } catch (error) {
+            console.error('❌ Lỗi load GeoFeatures to map:', error);
+        }
+    }, [geoFeatures, showGeoFeatures, setupGeoFeaturesLayers]);
+
+    // Setup layers when map loads
+    useEffect(() => {
+        if (mapInstanceRef.current) {
+            setupGeoFeaturesLayers(mapInstanceRef.current);
+        }
+    }, [setupGeoFeaturesLayers]);
+
+    // Load features when geoFeatures or showGeoFeatures changes
+    useEffect(() => {
+        if (mapInstanceRef.current && geoFeatures.length > 0) {
+            devLog('🔄 GeoFeatures changed, reloading to map...', {
+                featuresCount: geoFeatures.length,
+                showGeoFeatures
+            });
+            const timer = setTimeout(() => {
+                loadGeoFeaturesToMap();
+            }, 300);
+            return () => clearTimeout(timer);
+        } else if (mapInstanceRef.current && geoFeatures.length === 0) {
+            // Clear features if empty
+            try {
+                const sourceId = 'geo-features-source';
+                if (mapInstanceRef.current.getSource(sourceId)) {
+                    mapInstanceRef.current.getSource(sourceId).setData({
+                        type: 'FeatureCollection',
+                        features: []
+                    });
+                }
+            } catch (err) {
+                // Ignore
+            }
+        }
+    }, [geoFeatures, showGeoFeatures, loadGeoFeaturesToMap]);
+
     // Xử lý click trên map để chọn tọa độ (chỉ dùng khi đang edit hoặc quick rescue)
     const handleMapClick = useCallback((event) => {
         if (editingRequest) {
             const { lng, lat } = event.lngLat
             setClickedCoords({ lat, lng })
             message.info(`Đã chọn tọa độ: ${lat.toFixed(6)}, ${lng.toFixed(6)}`)
+            return
         }
-    }, [editingRequest])
+
+        // Check if clicked on GeoFeature
+        if (mapInstanceRef.current && showGeoFeatures) {
+            const features = mapInstanceRef.current.queryRenderedFeatures(event.point, {
+                layers: ['geo-features-polygon', 'geo-features-polygon-outline', 'geo-features-line', 'geo-features-point']
+            })
+
+            if (features.length > 0) {
+                const feature = features[0]
+                const props = feature.properties
+                // Find full feature from state
+                const fullFeature = geoFeatures.find(f => f.properties?.id === props.id)
+                if (fullFeature) {
+                    setSelectedGeoFeature(fullFeature)
+                    setSelectedRescue(null) // Clear rescue selection
+                    setSelectedPoint(null) // Clear safe point selection
+                    setSelectedSupportRequest(null) // Clear support request selection
+                }
+            }
+        }
+    }, [editingRequest, showGeoFeatures, geoFeatures])
 
     // Throttle map move để tối ưu hiệu năng trên mobile
     const moveTimeoutRef = useRef(null)
@@ -865,7 +1780,7 @@ function MapPage() {
                 message.success('Đã cập nhật tọa độ thành công!')
                 // Refresh danh sách
                 try {
-                    const rescueRes = await axios.get(`${API_URL}/api/rescue-requests`)
+                    const rescueRes = await axios.get(`${API_URL}/api/rescue-requests?limit=10000`)
                     if (rescueRes.data && rescueRes.data.success) {
                         setRescueRequests(rescueRes.data.data)
                     }
@@ -890,6 +1805,146 @@ function MapPage() {
             message.error(errorMessage)
         } finally {
             setIsUpdating(false)
+        }
+    }
+
+    // Handler lấy GPS location cho form thêm điểm tiếp nhận cứu trợ
+    const handleGetCurrentLocationForReliefPoint = () => {
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    const newLocation = {
+                        lat: position.coords.latitude,
+                        lng: position.coords.longitude
+                    }
+                    setAddReliefPointLocation(newLocation)
+                    addReliefPointForm.setFieldsValue({
+                        address: `${newLocation.lat.toFixed(6)}, ${newLocation.lng.toFixed(6)}`
+                    })
+                    message.success('Đã lấy vị trí GPS thành công!')
+                },
+                (error) => {
+                    console.error('Lỗi lấy GPS:', error)
+                    message.error('Không thể lấy vị trí GPS. Vui lòng chọn trên bản đồ.')
+                }
+            )
+        } else {
+            message.warning('Trình duyệt không hỗ trợ GPS. Vui lòng chọn trên bản đồ.')
+        }
+    }
+
+    // Handler Google Maps URL change cho relief point
+    const handleReliefPointGoogleMapsLinkChange = (e) => {
+        const url = e.target.value.trim()
+        setAddReliefPointGoogleMapsUrl(url)
+        if (url) {
+            const coords = parseGoogleMapsCoords(url)
+            if (coords && Array.isArray(coords) && coords.length === 2) {
+                const [lng, lat] = coords
+                const locationObj = { lat, lng }
+                setAddReliefPointParsedCoords(locationObj)
+                setAddReliefPointLocation(locationObj)
+                // Hiển thị thông báo thành công khi parse được tọa độ
+                message.success(`✅ Đã tìm thấy tọa độ: ${lat.toFixed(6)}, ${lng.toFixed(6)}`)
+            } else {
+                setAddReliefPointParsedCoords(null)
+                setAddReliefPointLocation(null)
+            }
+        } else {
+            setAddReliefPointParsedCoords(null)
+            setAddReliefPointLocation(null)
+        }
+    }
+
+    // Handler submit form thêm điểm tiếp nhận cứu trợ
+    const handleAddReliefPointSubmit = async (values) => {
+        try {
+            setAddReliefPointLoading(true)
+
+            // Validate location - ưu tiên Google Maps URL, sau đó location picker
+            let finalLocation = null
+            if (addReliefPointGoogleMapsUrl && addReliefPointParsedCoords) {
+                finalLocation = addReliefPointParsedCoords
+            } else if (addReliefPointLocation && addReliefPointLocation.lat && addReliefPointLocation.lng) {
+                finalLocation = addReliefPointLocation
+            }
+
+            if (!finalLocation) {
+                message.error('Vui lòng dán link Google Maps hoặc chọn vị trí trên bản đồ!')
+                setAddReliefPointLoading(false)
+                return
+            }
+
+            // Validate description
+            if (!values.description || values.description.trim().length === 0) {
+                message.error('Vui lòng nhập thông tin về điểm tiếp nhận cứu trợ!')
+                setAddReliefPointLoading(false)
+                return
+            }
+
+            // Validate reliefType - phải là array
+            let reliefTypes = values.reliefType
+            if (!Array.isArray(reliefTypes) || reliefTypes.length === 0) {
+                message.error('Vui lòng chọn ít nhất một loại cứu trợ!')
+                setAddReliefPointLoading(false)
+                return
+            }
+
+            // Xử lý type - nếu là array thì lấy phần tử đầu tiên
+            let finalType = values.type;
+            if (Array.isArray(finalType)) {
+                finalType = finalType.length > 0 ? finalType[0] : 'Điểm tiếp nhận cứu trợ';
+            }
+
+            // Tạo relief point data
+            const reliefPointData = {
+                name: values.name || 'Điểm tiếp nhận cứu trợ',
+                address: values.address || `${finalLocation.lat.toFixed(6)}, ${finalLocation.lng.toFixed(6)}`,
+                phone: values.phone || null,
+                description: values.description.trim(),
+                type: finalType || 'Điểm tiếp nhận cứu trợ',
+                reliefType: reliefTypes,
+                operatingHours: values.operatingHours || null,
+                contactPerson: values.contactPerson || null,
+                status: 'Hoạt động',
+                notes: values.notes || null,
+                googleMapsUrl: addReliefPointGoogleMapsUrl || null,
+                location: finalLocation
+            }
+
+            // Gửi request
+            const response = await axios.post(`${API_URL}/api/relief-points`, reliefPointData)
+
+            if (response.data && response.data.success) {
+                message.success('Đã thêm điểm tiếp nhận cứu trợ thành công!')
+
+                // Refresh danh sách relief points
+                try {
+                    const reliefRes = await axios.get(`${API_URL}/api/relief-points`)
+                    if (reliefRes.data && reliefRes.data.success && Array.isArray(reliefRes.data.data)) {
+                        setReliefPoints(reliefRes.data.data)
+                    }
+                } catch (refreshError) {
+                    console.error('Lỗi refresh danh sách:', refreshError)
+                }
+
+                // Đóng modal và reset form
+                setAddReliefPointModalVisible(false)
+                addReliefPointForm.resetFields()
+                setAddReliefPointLocation(null)
+                setAddReliefPointGoogleMapsUrl('')
+                setAddReliefPointParsedCoords(null)
+            } else {
+                message.error(response.data?.message || 'Thêm điểm tiếp nhận cứu trợ thất bại')
+            }
+        } catch (error) {
+            console.error('Lỗi thêm điểm tiếp nhận cứu trợ:', error)
+            const errorMessage = error.response?.data?.message ||
+                error.message ||
+                'Lỗi khi thêm điểm tiếp nhận cứu trợ. Vui lòng thử lại.'
+            message.error(errorMessage)
+        } finally {
+            setAddReliefPointLoading(false)
         }
     }
 
@@ -1009,18 +2064,15 @@ function MapPage() {
                 return
             }
 
-            // Convert ảnh sang base64 nếu có
+            // Resize và convert ảnh sang base64 nếu có
             let imageBase64 = null
             if (quickRescueImageFile) {
                 try {
-                    imageBase64 = await new Promise((resolve, reject) => {
-                        const reader = new FileReader()
-                        reader.onloadend = () => resolve(reader.result)
-                        reader.onerror = (error) => reject(error)
-                        reader.readAsDataURL(quickRescueImageFile)
-                    })
+                    const processingMessage = message.loading('Đang xử lý và nén ảnh...', 0);
+                    imageBase64 = await resizeImageForUpload(quickRescueImageFile);
+                    processingMessage();
                 } catch (imgError) {
-                    console.error('Lỗi convert ảnh:', imgError)
+                    console.error('Lỗi xử lý ảnh:', imgError)
                     message.warning('Không thể xử lý ảnh, sẽ gửi báo cáo không có ảnh')
                 }
             }
@@ -1049,7 +2101,7 @@ function MapPage() {
 
                 // Refresh danh sách cầu cứu
                 try {
-                    const rescueRes = await axios.get(`${API_URL}/api/rescue-requests`)
+                    const rescueRes = await axios.get(`${API_URL}/api/rescue-requests?limit=10000`)
                     if (rescueRes.data && rescueRes.data.success) {
                         setRescueRequests(rescueRes.data.data)
                     }
@@ -1062,7 +2114,12 @@ function MapPage() {
         } catch (error) {
             console.error('Lỗi gửi yêu cầu:', error)
             if (error.response) {
-                message.error(`Lỗi: ${error.response.data?.message || error.message}`)
+                const errorData = error.response.data
+                if (errorData?.isDuplicate) {
+                    message.warning(`⚠️ ${errorData.message || 'Báo cáo này có vẻ trùng lặp với báo cáo đã có. Vui lòng kiểm tra lại!'}`)
+                } else {
+                    message.error(`Lỗi: ${errorData?.message || error.message}`)
+                }
             } else if (error.request) {
                 message.error('Không thể kết nối server. Vui lòng kiểm tra kết nối mạng!')
             } else {
@@ -1091,6 +2148,205 @@ function MapPage() {
         quickRescueForm.resetFields()
         setQuickRescueLocation(null)
         setQuickRescueImageFile(null)
+    }
+
+    // Handler mở modal support request
+    const openSupportRequestModal = () => {
+        setSupportRequestModalVisible(true)
+        // Lấy vị trí hiện tại từ map center nếu có
+        if (viewState.latitude && viewState.longitude) {
+            setSupportRequestLocation({
+                lat: viewState.latitude,
+                lng: viewState.longitude
+            })
+        }
+    }
+
+    // Handler đóng modal support request
+    const closeSupportRequestModal = () => {
+        setSupportRequestModalVisible(false)
+        supportRequestForm.resetFields()
+        setSupportRequestLocation(null)
+        setSupportRequestImageFile(null)
+        setSupportRequestGoogleMapsUrl('')
+        setSupportRequestParsedCoords(null)
+    }
+
+    // Hotline modal handlers
+    const openHotlineModal = () => {
+        setHotlineModalVisible(true)
+    }
+
+    const closeHotlineModal = () => {
+        setHotlineModalVisible(false)
+    }
+
+    // Handler chọn vị trí từ GPS cho support request
+    const handleGetCurrentLocationForSupportRequest = () => {
+        if (navigator.geolocation) {
+            setSupportRequestLoading(true)
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    const newLocation = {
+                        lat: position.coords.latitude,
+                        lng: position.coords.longitude
+                    }
+                    setSupportRequestLocation(newLocation)
+                    setViewState(prev => ({
+                        ...prev,
+                        longitude: newLocation.lng,
+                        latitude: newLocation.lat,
+                        zoom: 15
+                    }))
+                    message.success('Đã lấy vị trí GPS thành công!')
+                    setSupportRequestLoading(false)
+                },
+                (error) => {
+                    console.error('Lỗi GPS:', error)
+                    message.warning('Không thể lấy vị trí GPS. Vui lòng chọn trên bản đồ.')
+                    setSupportRequestLoading(false)
+                }
+            )
+        } else {
+            message.warning('Trình duyệt không hỗ trợ GPS. Vui lòng chọn trên bản đồ.')
+        }
+    }
+
+    // Handler upload ảnh cho support request
+    const handleSupportRequestImageChange = (info) => {
+        let file = null
+        if (info.file) {
+            if (info.file.originFileObj) {
+                file = info.file.originFileObj
+            } else if (info.file instanceof File) {
+                file = info.file
+            } else if (info.fileList && info.fileList.length > 0) {
+                const firstFile = info.fileList[0]
+                file = firstFile.originFileObj || firstFile
+            }
+        } else if (info.fileList && info.fileList.length > 0) {
+            const firstFile = info.fileList[0]
+            file = firstFile.originFileObj || firstFile
+        }
+
+        if (file && file instanceof File) {
+            setSupportRequestImageFile(file)
+            message.success(`Đã chọn ảnh: ${file.name}`)
+        } else {
+            if (info.fileList && info.fileList.length === 0) {
+                setSupportRequestImageFile(null)
+            }
+        }
+    }
+
+    // Handler Google Maps URL change cho support request
+    const handleSupportRequestGoogleMapsLinkChange = (e) => {
+        const url = e.target.value.trim()
+        setSupportRequestGoogleMapsUrl(url)
+        if (url) {
+            const coords = parseGoogleMapsCoords(url)
+            if (coords && Array.isArray(coords) && coords.length === 2) {
+                const [lng, lat] = coords
+                const locationObj = { lat, lng }
+                setSupportRequestParsedCoords(locationObj)
+                setSupportRequestLocation(locationObj)
+                message.success(`✅ Đã tìm thấy tọa độ: ${lat.toFixed(6)}, ${lng.toFixed(6)}`)
+            } else {
+                setSupportRequestParsedCoords(null)
+            }
+        } else {
+            setSupportRequestParsedCoords(null)
+        }
+    }
+
+    // Handler submit support request form
+    const handleSupportRequestSubmit = async (values) => {
+        try {
+            setSupportRequestLoading(true)
+
+            // Validate
+            if (!values.description || values.description.trim().length === 0) {
+                message.error('Vui lòng nhập mô tả nhu cầu hỗ trợ!')
+                setSupportRequestLoading(false)
+                return
+            }
+
+            if (!values.needs || !Array.isArray(values.needs) || values.needs.length === 0) {
+                message.error('Vui lòng chọn ít nhất một loại hỗ trợ cần thiết!')
+                setSupportRequestLoading(false)
+                return
+            }
+
+            // Resize và convert ảnh sang base64 nếu có
+            let imageBase64 = null
+            if (supportRequestImageFile) {
+                try {
+                    const processingMessage = message.loading('Đang xử lý và nén ảnh...', 0);
+                    imageBase64 = await resizeImageForUpload(supportRequestImageFile);
+                    processingMessage();
+                } catch (imgError) {
+                    console.error('Lỗi xử lý ảnh:', imgError)
+                    message.warning('Không thể xử lý ảnh, sẽ gửi yêu cầu không có ảnh')
+                }
+            }
+
+            // Ưu tiên dùng tọa độ từ Google Maps link
+            const finalLocation = supportRequestParsedCoords || supportRequestLocation || { lat: null, lng: null }
+
+            const supportData = {
+                location: finalLocation,
+                description: values.description || '',
+                imageBase64: imageBase64,
+                phone: values.phone || '',
+                name: values.name || '',
+                googleMapsUrl: supportRequestGoogleMapsUrl || null,
+                needs: values.needs || [],
+                peopleCount: values.peopleCount || 1
+            }
+
+            const response = await axios.post(`${API_URL}/api/support-requests`, supportData, {
+                timeout: 30000,
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+
+            if (response.data && response.data.success) {
+                message.success('Đã gửi thành công yêu cầu hỗ trợ!')
+                supportRequestForm.resetFields()
+                setSupportRequestLocation(null)
+                setSupportRequestImageFile(null)
+                setSupportRequestParsedCoords(null)
+                setSupportRequestGoogleMapsUrl('')
+                setSupportRequestModalVisible(false)
+
+                // Refresh danh sách support requests
+                try {
+                    const supportRes = await axios.get(`${API_URL}/api/support-requests?limit=10000`)
+                    if (supportRes.data && supportRes.data.success) {
+                        setSupportRequests(supportRes.data.data)
+                    }
+                } catch (refreshError) {
+                    console.error('Lỗi refresh danh sách support requests:', refreshError)
+                }
+            }
+        } catch (error) {
+            console.error('Lỗi gửi support request:', error)
+            if (error.response) {
+                const errorData = error.response.data
+                if (errorData?.isDuplicate) {
+                    message.warning(`⚠️ ${errorData.message || 'Yêu cầu này có vẻ trùng lặp với yêu cầu đã có. Vui lòng kiểm tra lại!'}`)
+                } else {
+                    message.error(`Lỗi: ${errorData?.message || error.message}`)
+                }
+            } else if (error.request) {
+                message.error('Không thể kết nối server. Vui lòng kiểm tra kết nối mạng!')
+            } else {
+                message.error(`Lỗi: ${error.message}`)
+            }
+        } finally {
+            setSupportRequestLoading(false)
+        }
     }
 
     // Handler chọn vị trí từ GPS
@@ -1163,6 +2419,13 @@ function MapPage() {
                     lat: locationPickerSelected.lat,
                     lng: locationPickerSelected.lng
                 })
+            } else if (locationPickerContext === 'addReliefPoint') {
+                setAddReliefPointLocation(locationPickerSelected)
+                addReliefPointForm.setFieldsValue({
+                    address: `${locationPickerSelected.lat.toFixed(6)}, ${locationPickerSelected.lng.toFixed(6)}`
+                })
+            } else if (locationPickerContext === 'supportRequest') {
+                setSupportRequestLocation(locationPickerSelected)
             } else {
                 // Default: quick rescue
                 setQuickRescueLocation(locationPickerSelected)
@@ -1301,35 +2564,90 @@ function MapPage() {
                     <div className="map-tabs">
                         <button
                             className={`map-tab-button ${activeFilter === 'all' ? 'active' : ''}`}
-                            onClick={() => setActiveFilter('all')}
+                            onClick={() => {
+                                setActiveFilter('all')
+                                setSidebarPagination({ current: 1, pageSize: sidebarPagination.pageSize })
+                            }}
                         >
                             <span>📋</span>
-                            <span>Tất cả ({filterCounts.total + filterCounts.safe})</span>
+                            <span>Tất cả ({filterCounts.all})</span>
+                        </button>
+                        <button
+                            className={`map-tab-button support ${activeFilter === 'support' ? 'active' : ''}`}
+                            onClick={() => {
+                                setActiveFilter('support')
+                                setSidebarPagination({ current: 1, pageSize: sidebarPagination.pageSize })
+                            }}
+                        >
+                            <span>🎁</span>
+                            <span>Hỗ trợ ({filterCounts.support || 0})</span>
                         </button>
                         <button
                             className={`map-tab-button rescue ${activeFilter === 'rescue' ? 'active' : ''}`}
-                            onClick={() => setActiveFilter('rescue')}
+                            onClick={() => {
+                                setActiveFilter('rescue')
+                                setSidebarPagination({ current: 1, pageSize: sidebarPagination.pageSize })
+                            }}
                         >
                             <span>🆘</span>
                             <span>Cần cứu ({filterCounts.rescue})</span>
                         </button>
                         <button
+                            className={`map-tab-button news ${activeFilter === 'news' ? 'active' : ''}`}
+                            onClick={() => {
+                                setActiveFilter('news')
+                                setSidebarPagination({ current: 1, pageSize: sidebarPagination.pageSize })
+                            }}
+                        >
+                            <span>📰</span>
+                            <span>Tin tức mới ({filterCounts.news})</span>
+                        </button>
+                        <button
+                            className={`map-tab-button geofeatures ${activeFilter === 'geofeatures' ? 'active' : ''}`}
+                            onClick={() => {
+                                setActiveFilter('geofeatures')
+                                setSidebarPagination({ current: 1, pageSize: sidebarPagination.pageSize })
+                            }}
+                        >
+                            <span>🗺️</span>
+                            <span>Đối tượng bản đồ ({filterCounts.geoFeatures})</span>
+                        </button>
+                        <button
                             className={`map-tab-button safe ${activeFilter === 'safe' ? 'active' : ''}`}
-                            onClick={() => setActiveFilter('safe')}
+                            onClick={() => {
+                                setActiveFilter('safe')
+                                setSidebarPagination({ current: 1, pageSize: sidebarPagination.pageSize })
+                            }}
                         >
                             <span>🚁</span>
                             <span>Đội cứu ({filterCounts.safe})</span>
                         </button>
                         <button
+                            className={`map-tab-button relief ${activeFilter === 'relief' ? 'active' : ''}`}
+                            onClick={() => {
+                                setActiveFilter('relief')
+                                setSidebarPagination({ current: 1, pageSize: sidebarPagination.pageSize })
+                            }}
+                        >
+                            <span>📦</span>
+                            <span>Cứu trợ ({filterCounts.relief})</span>
+                        </button>
+                        <button
                             className={`map-tab-button thuydien ${activeFilter === 'thuydien' ? 'active' : ''}`}
-                            onClick={() => setActiveFilter('thuydien')}
+                            onClick={() => {
+                                setActiveFilter('thuydien')
+                                setSidebarPagination({ current: 1, pageSize: sidebarPagination.pageSize })
+                            }}
                         >
                             <span>⚡</span>
                             <span>Hồ thủy điện ({filterCounts.thuydien})</span>
                         </button>
                         <button
                             className={`map-tab-button waterlevel ${activeFilter === 'waterlevel' ? 'active' : ''}`}
-                            onClick={() => setActiveFilter('waterlevel')}
+                            onClick={() => {
+                                setActiveFilter('waterlevel')
+                                setSidebarPagination({ current: 1, pageSize: sidebarPagination.pageSize })
+                            }}
                         >
                             <span>💧</span>
                             <span>Trạm mực nước ({filterCounts.waterlevel})</span>
@@ -1345,7 +2663,10 @@ function MapPage() {
                                 enterButton={<SearchOutlined />}
                                 size="large"
                                 value={searchText}
-                                onChange={(e) => setSearchText(e.target.value)}
+                                onChange={(e) => {
+                                    setSearchText(e.target.value)
+                                    setSidebarPagination({ current: 1, pageSize: sidebarPagination.pageSize })
+                                }}
                             />
                         </div>
 
@@ -1354,24 +2675,166 @@ function MapPage() {
                             <Text strong style={{ fontSize: '14px', color: '#666' }}>
                                 {activeFilter === 'rescue' ? 'Cầu cứu' :
                                     activeFilter === 'safe' ? 'Đội cứu hộ' :
-                                        activeFilter === 'thuydien' ? 'Hồ thủy điện' :
-                                            activeFilter === 'waterlevel' ? 'Trạm mực nước' : 'Tất cả'} ({sidebarItems.length})
+                                        activeFilter === 'support' ? 'Yêu cầu hỗ trợ' :
+                                            activeFilter === 'thuydien' ? 'Hồ thủy điện' :
+                                                activeFilter === 'waterlevel' ? 'Trạm mực nước' :
+                                                    activeFilter === 'news' ? 'Tin tức mới' :
+                                                        activeFilter === 'geofeatures' ? 'Đối tượng bản đồ' : 'Tất cả'} ({sidebarItems.length})
                             </Text>
+                            {sidebarItems.length > sidebarPagination.pageSize && (
+                                <Text type="secondary" style={{ fontSize: '12px', display: 'block', marginTop: '4px' }}>
+                                    Hiển thị {sidebarPagination.pageSize} mục mỗi trang để tối ưu hiệu năng
+                                </Text>
+                            )}
                         </div>
 
                         {sidebarItems.length === 0 ? (
                             <Empty description={
                                 activeFilter === 'safe' ? 'Trống' :
-                                    activeFilter === 'thuydien' ? 'Không có hồ thủy điện nào' :
-                                        activeFilter === 'waterlevel' ? 'Không có trạm mực nước nào' :
-                                            'Không có cầu cứu nào'
+                                    activeFilter === 'support' ? 'Không có yêu cầu hỗ trợ nào' :
+                                        activeFilter === 'thuydien' ? 'Không có hồ thủy điện nào' :
+                                            activeFilter === 'waterlevel' ? 'Không có trạm mực nước nào' :
+                                                activeFilter === 'news' ? 'Không có tin tức nào' :
+                                                    activeFilter === 'geofeatures' ? 'Không có đối tượng bản đồ nào' :
+                                                        'Không có cầu cứu nào'
                             } style={{ marginTop: '40px' }} />
                         ) : (
                             <List
                                 dataSource={sidebarItems}
                                 itemLayout="vertical"
                                 style={{ maxHeight: 'calc(100vh - 200px)', overflowY: 'auto' }}
+                                pagination={{
+                                    current: sidebarPagination.current,
+                                    pageSize: sidebarPagination.pageSize,
+                                    total: sidebarItems.length,
+                                    showSizeChanger: true,
+                                    showQuickJumper: true,
+                                    showTotal: (total, range) => `${range[0]}-${range[1]} / ${total} mục`,
+                                    pageSizeOptions: ['10', '20', '50', '100'],
+                                    onChange: (page, pageSize) => {
+                                        setSidebarPagination({ current: page, pageSize })
+                                        // Scroll to top khi đổi trang
+                                        const sidebarContent = document.querySelector('.sidebar-content')
+                                        if (sidebarContent) {
+                                            sidebarContent.scrollTop = 0
+                                        }
+                                    },
+                                    onShowSizeChange: (current, size) => {
+                                        setSidebarPagination({ current: 1, pageSize: size })
+                                        const sidebarContent = document.querySelector('.sidebar-content')
+                                        if (sidebarContent) {
+                                            sidebarContent.scrollTop = 0
+                                        }
+                                    }
+                                }}
                                 renderItem={(item) => {
+                                    // Support request items
+                                    if (item.type === 'support' && item.supportRequest) {
+                                        return (
+                                            <List.Item
+                                                className={`rescue-list-item ${selectedListItem === (item._id || item.id) ? 'selected' : ''}`}
+                                                onClick={() => {
+                                                    if (item.coords && item.coords[0] && item.coords[1]) {
+                                                        setViewState(prev => ({
+                                                            ...prev,
+                                                            longitude: item.coords[0],
+                                                            latitude: item.coords[1],
+                                                            zoom: Math.max(prev.zoom, 14)
+                                                        }))
+                                                        setSelectedSupportRequest(item.supportRequest)
+                                                        setSelectedRescue(null)
+                                                        setSelectedPoint(null)
+                                                        setSelectedGeoFeature(null)
+                                                        setSelectedListItem(item._id || item.id)
+                                                        if (isMobile) {
+                                                            setSidebarOpen(false)
+                                                        }
+                                                    }
+                                                }}
+                                                style={{
+                                                    cursor: 'pointer',
+                                                    padding: '12px',
+                                                    marginBottom: '8px',
+                                                    borderRadius: '8px',
+                                                    border: selectedListItem === (item._id || item.id) ? '2px solid #1890ff' : '1px solid #f0f0f0',
+                                                    background: selectedListItem === (item._id || item.id) ? '#f0f7ff' : '#fff',
+                                                    transition: 'all 0.2s'
+                                                }}
+                                            >
+                                                {item.coords && item.coords[0] && item.coords[1] && (
+                                                    <div style={{ marginBottom: '8px', borderRadius: '6px', overflow: 'hidden' }}>
+                                                        <img
+                                                            src={`https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/pin-s+1890ff(${item.coords[0]},${item.coords[1]})/${item.coords[0]},${item.coords[1]},13,0/200x120?access_token=${MAPBOX_TOKEN}`}
+                                                            alt="Map thumbnail"
+                                                            style={{ width: '100%', height: '120px', objectFit: 'cover' }}
+                                                            onError={(e) => {
+                                                                e.target.style.display = 'none'
+                                                            }}
+                                                        />
+                                                    </div>
+                                                )}
+                                                <Space style={{ marginBottom: '8px' }} wrap>
+                                                    {item.needs && item.needs.map((need, idx) => (
+                                                        <Tag key={idx} color="blue" style={{ fontSize: '12px', margin: 0 }}>
+                                                            {need}
+                                                        </Tag>
+                                                    ))}
+                                                    <Tag color={
+                                                        item.status === 'Chưa xử lý' ? 'red' :
+                                                            item.status === 'Đang xử lý' ? 'orange' :
+                                                                'green'
+                                                    } style={{ fontSize: '12px', margin: 0 }}>
+                                                        {item.status || 'Chưa xử lý'}
+                                                    </Tag>
+                                                    {item.timestamp && (
+                                                        <Text type="secondary" style={{ fontSize: '12px' }}>
+                                                            {formatTime(item.timestamp)}
+                                                        </Text>
+                                                    )}
+                                                </Space>
+                                                <Text strong style={{ fontSize: '14px', display: 'block', marginBottom: '8px' }}>
+                                                    {item.name || 'Yêu cầu hỗ trợ'}
+                                                </Text>
+                                                {item.description && (
+                                                    <Text style={{ fontSize: '13px', display: 'block', marginBottom: '8px' }}>
+                                                        {item.description.substring(0, 150)}
+                                                        {item.description.length > 150 && '...'}
+                                                    </Text>
+                                                )}
+                                                {item.peopleCount && (
+                                                    <Text type="secondary" style={{ fontSize: '12px', display: 'block', marginBottom: '8px' }}>
+                                                        👥 Số người: {item.peopleCount}
+                                                    </Text>
+                                                )}
+                                                {item.phone && (
+                                                    <Button
+                                                        size="small"
+                                                        type="link"
+                                                        icon={<PhoneOutlined />}
+                                                        href={`tel:${item.phone.replace(/\./g, '')}`}
+                                                        style={{ padding: 0, fontSize: '12px' }}
+                                                        onClick={(e) => e.stopPropagation()}
+                                                    >
+                                                        {item.phone}
+                                                    </Button>
+                                                )}
+                                                {item.coords && item.coords[0] && item.coords[1] && (
+                                                    <Button
+                                                        size="small"
+                                                        type="link"
+                                                        icon={<GlobalOutlined />}
+                                                        href={getGoogleMapsLink(item.coords)}
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        style={{ padding: 0, fontSize: '12px', marginTop: '8px' }}
+                                                        onClick={(e) => e.stopPropagation()}
+                                                    >
+                                                        Xem trên Google Map
+                                                    </Button>
+                                                )}
+                                            </List.Item>
+                                        )
+                                    }
                                     // Thủy điện items
                                     if (item.type === 'thuydien' && item.reservoir) {
                                         return (
@@ -1456,6 +2919,103 @@ function MapPage() {
                                                         onClick={(e) => e.stopPropagation()}
                                                     >
                                                         Google Map
+                                                    </Button>
+                                                )}
+                                            </List.Item>
+                                        )
+                                    }
+                                    // GeoFeatures items
+                                    if (item.type === 'geofeature' && item.geoFeature) {
+                                        const geoFeature = item.geoFeature
+                                        const statusColor = item.status === 'Hoạt động' ? 'red' :
+                                            item.status === 'Đã xử lý' ? 'green' : 'default'
+                                        const severityColor = item.severity === 'Cao' ? 'red' :
+                                            item.severity === 'Trung bình' ? 'orange' : 'green'
+
+                                        return (
+                                            <List.Item
+                                                className={`rescue-list-item ${selectedListItem === (item._id || item.id) ? 'selected' : ''}`}
+                                                onClick={() => {
+                                                    if (item.coords && item.coords[0] && item.coords[1]) {
+                                                        setViewState(prev => ({
+                                                            ...prev,
+                                                            longitude: item.coords[0],
+                                                            latitude: item.coords[1],
+                                                            zoom: Math.max(prev.zoom, 14)
+                                                        }))
+                                                        setSelectedListItem(item._id || item.id)
+                                                        setSelectedGeoFeature(geoFeature)
+                                                    } else {
+                                                        message.warning('Không có tọa độ hợp lệ cho đối tượng này')
+                                                    }
+                                                    if (isMobile) {
+                                                        setSidebarOpen(false)
+                                                    }
+                                                }}
+                                                style={{
+                                                    cursor: 'pointer',
+                                                    padding: '12px',
+                                                    marginBottom: '8px',
+                                                    borderRadius: '8px',
+                                                    border: selectedListItem === (item._id || item.id) ? `2px solid ${item.color || '#1890ff'}` : '1px solid #f0f0f0',
+                                                    background: selectedListItem === (item._id || item.id) ? `${item.color || '#1890ff'}15` : '#fff',
+                                                    transition: 'all 0.2s'
+                                                }}
+                                            >
+                                                {item.coords && item.coords[0] && item.coords[1] && (
+                                                    <div style={{ marginBottom: '8px', borderRadius: '6px', overflow: 'hidden' }}>
+                                                        <img
+                                                            src={`https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/pin-s+${(item.color || '#1890ff').replace('#', '')}(${item.coords[0]},${item.coords[1]})/${item.coords[0]},${item.coords[1]},13,0/200x120?access_token=${MAPBOX_TOKEN}`}
+                                                            alt="Map thumbnail"
+                                                            style={{ width: '100%', height: '120px', objectFit: 'cover' }}
+                                                            onError={(e) => {
+                                                                e.target.style.display = 'none'
+                                                            }}
+                                                        />
+                                                    </div>
+                                                )}
+                                                <Space style={{ marginBottom: '8px' }} wrap>
+                                                    <Tag color={statusColor}>
+                                                        {item.category || 'Đối tượng bản đồ'}
+                                                    </Tag>
+                                                    {item.status && (
+                                                        <Tag color={statusColor === 'red' ? 'red' : statusColor === 'green' ? 'green' : 'default'}>
+                                                            {item.status}
+                                                        </Tag>
+                                                    )}
+                                                    {item.severity && (
+                                                        <Tag color={severityColor}>
+                                                            {item.severity}
+                                                        </Tag>
+                                                    )}
+                                                    {item.geometryType && (
+                                                        <Tag>
+                                                            {item.geometryType === 'Point' ? 'Điểm' :
+                                                                item.geometryType === 'LineString' ? 'Đường' :
+                                                                    item.geometryType === 'Polygon' ? 'Vùng' : item.geometryType}
+                                                        </Tag>
+                                                    )}
+                                                </Space>
+                                                <Text strong style={{ fontSize: '14px', display: 'block', marginBottom: '8px' }}>
+                                                    {item.location}
+                                                </Text>
+                                                {item.description && (
+                                                    <Text type="secondary" style={{ fontSize: '12px', display: 'block', marginBottom: '8px' }}>
+                                                        {item.description}
+                                                    </Text>
+                                                )}
+                                                {item.coords && item.coords[0] && item.coords[1] && (
+                                                    <Button
+                                                        size="small"
+                                                        type="link"
+                                                        icon={<GlobalOutlined />}
+                                                        href={getGoogleMapsLink(item.coords)}
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        style={{ padding: 0, fontSize: '12px', marginTop: '8px' }}
+                                                        onClick={(e) => e.stopPropagation()}
+                                                    >
+                                                        Xem trên Google Map
                                                     </Button>
                                                 )}
                                             </List.Item>
@@ -1547,6 +3107,246 @@ function MapPage() {
                                                         Google Map
                                                     </Button>
                                                 )}
+                                            </List.Item>
+                                        )
+                                    }
+                                    // Tin tức items
+                                    if (item.type === 'news' && item.news) {
+                                        const categoryColors = {
+                                            'thông báo khẩn': 'red',
+                                            'hướng dẫn': 'blue',
+                                            'cập nhật tình hình': 'green'
+                                        }
+                                        const categoryLabels = {
+                                            'thông báo khẩn': 'Thông báo khẩn',
+                                            'hướng dẫn': 'Hướng dẫn',
+                                            'cập nhật tình hình': 'Cập nhật tình hình'
+                                        }
+                                        const isUrgent = item.category === 'thông báo khẩn'
+                                        const borderColor = isUrgent
+                                            ? (selectedListItem === (item._id || item.id) ? '#dc2626' : '#ef4444')
+                                            : (selectedListItem === (item._id || item.id) ? '#1890ff' : '#e5e7eb')
+                                        const bgColor = isUrgent
+                                            ? (selectedListItem === (item._id || item.id) ? '#fef2f2' : '#fff')
+                                            : (selectedListItem === (item._id || item.id) ? '#f0f8ff' : '#fff')
+
+                                        return (
+                                            <List.Item
+                                                className={`news-list-item ${isUrgent ? 'news-urgent' : ''} ${selectedListItem === (item._id || item.id) ? 'selected' : ''}`}
+                                                onClick={() => {
+                                                    setSelectedListItem(item._id || item.id)
+                                                    if (isMobile) {
+                                                        setSidebarOpen(false)
+                                                    }
+                                                }}
+                                                style={{
+                                                    cursor: 'pointer',
+                                                    padding: '16px',
+                                                    marginBottom: '12px',
+                                                    borderRadius: '12px',
+                                                    border: `2px solid ${borderColor}`,
+                                                    background: bgColor,
+                                                    transition: 'all 0.3s ease',
+                                                    boxShadow: selectedListItem === (item._id || item.id)
+                                                        ? (isUrgent ? '0 4px 16px rgba(220, 38, 38, 0.2)' : '0 4px 16px rgba(24, 144, 255, 0.15)')
+                                                        : '0 2px 8px rgba(0, 0, 0, 0.08)'
+                                                }}
+                                            >
+                                                {/* Preview hình ảnh - fit cố định với styling đẹp hơn và có thể click để xem to */}
+                                                {item.imageUrl && (
+                                                    <div
+                                                        className="news-image-wrapper"
+                                                        style={{
+                                                            marginBottom: '12px',
+                                                            borderRadius: '10px',
+                                                            overflow: 'hidden',
+                                                            width: '100%',
+                                                            height: '220px',
+                                                            background: '#f5f5f5',
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            justifyContent: 'center',
+                                                            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)',
+                                                            position: 'relative',
+                                                            cursor: 'pointer'
+                                                        }}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation()
+                                                        }}
+                                                    >
+                                                        <Image
+                                                            src={item.imageUrl}
+                                                            alt={item.title}
+                                                            preview={{
+                                                                mask: '🔍 Xem ảnh',
+                                                                maskClassName: 'news-image-preview-mask'
+                                                            }}
+                                                            style={{
+                                                                width: '100%',
+                                                                height: '100%',
+                                                                objectFit: 'cover'
+                                                            }}
+                                                            onError={(e) => {
+                                                                e.target.style.display = 'none'
+                                                            }}
+                                                        />
+                                                    </div>
+                                                )}
+
+                                                {/* Tag và thời gian */}
+                                                <div style={{
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'space-between',
+                                                    marginBottom: '12px',
+                                                    flexWrap: 'wrap',
+                                                    gap: '8px'
+                                                }}>
+                                                    <Space wrap>
+                                                        <Tag
+                                                            color={categoryColors[item.category] || 'default'}
+                                                            style={{
+                                                                margin: 0,
+                                                                fontSize: '12px',
+                                                                padding: '4px 12px',
+                                                                borderRadius: '6px',
+                                                                fontWeight: 600,
+                                                                border: isUrgent ? '1px solid #dc2626' : 'none'
+                                                            }}
+                                                        >
+                                                            {categoryLabels[item.category] || item.category}
+                                                        </Tag>
+                                                        {item.timestamp && (
+                                                            <Text type="secondary" style={{ fontSize: '12px', color: '#6b7280' }}>
+                                                                <ClockCircleOutlined style={{ marginRight: '4px' }} />
+                                                                {formatTime(item.timestamp)}
+                                                            </Text>
+                                                        )}
+                                                    </Space>
+                                                    {item.views > 0 && (
+                                                        <Text type="secondary" style={{ fontSize: '12px', color: '#9ca3af' }}>
+                                                            👁️ {item.views}
+                                                        </Text>
+                                                    )}
+                                                </div>
+
+                                                {/* Tiêu đề */}
+                                                <Text strong style={{
+                                                    fontSize: '18px',
+                                                    display: 'block',
+                                                    marginBottom: '10px',
+                                                    color: isUrgent ? '#dc2626' : '#1f2937',
+                                                    lineHeight: '1.4',
+                                                    fontWeight: 700
+                                                }}>
+                                                    {item.title}
+                                                </Text>
+
+                                                {/* Nội dung */}
+                                                {item.content && (
+                                                    <div style={{ marginBottom: '12px' }}>
+                                                        <Text style={{
+                                                            fontSize: '14px',
+                                                            display: 'block',
+                                                            color: '#4b5563',
+                                                            lineHeight: '1.6',
+                                                            whiteSpace: 'pre-wrap',
+                                                            wordWrap: 'break-word'
+                                                        }}>
+                                                            {item.content.length > 250 && !expandedNewsItems.has(item._id || item.id)
+                                                                ? `${item.content.substring(0, 250)}...`
+                                                                : item.content
+                                                            }
+                                                        </Text>
+                                                        {item.content.length > 250 && (
+                                                            <Button
+                                                                type="link"
+                                                                size="small"
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation()
+                                                                    const itemId = item._id || item.id
+                                                                    if (expandedNewsItems.has(itemId)) {
+                                                                        // Thu gọn
+                                                                        setExpandedNewsItems(prev => {
+                                                                            const newSet = new Set(prev)
+                                                                            newSet.delete(itemId)
+                                                                            return newSet
+                                                                        })
+                                                                    } else {
+                                                                        // Mở rộng
+                                                                        setExpandedNewsItems(prev => new Set(prev).add(itemId))
+                                                                    }
+                                                                }}
+                                                                style={{
+                                                                    padding: '4px 0',
+                                                                    height: 'auto',
+                                                                    fontSize: '13px',
+                                                                    color: '#1890ff',
+                                                                    marginTop: '4px'
+                                                                }}
+                                                            >
+                                                                {expandedNewsItems.has(item._id || item.id) ? 'Thu gọn' : 'Xem thêm'}
+                                                            </Button>
+                                                        )}
+                                                        {item.content.length > 500 && (
+                                                            <Button
+                                                                type="link"
+                                                                size="small"
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation()
+                                                                    setSelectedNewsItem(item)
+                                                                    setNewsDetailModalVisible(true)
+                                                                }}
+                                                                style={{
+                                                                    padding: '4px 0',
+                                                                    height: 'auto',
+                                                                    fontSize: '13px',
+                                                                    color: '#1890ff',
+                                                                    marginLeft: '12px'
+                                                                }}
+                                                            >
+                                                                Xem toàn bộ
+                                                            </Button>
+                                                        )}
+                                                    </div>
+                                                )}
+
+                                                {/* Footer: Tác giả và Link nguồn */}
+                                                <div style={{
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'space-between',
+                                                    marginTop: '12px',
+                                                    paddingTop: '12px',
+                                                    borderTop: '1px solid #e5e7eb',
+                                                    flexWrap: 'wrap',
+                                                    gap: '8px'
+                                                }}>
+                                                    {item.author && (
+                                                        <Text type="secondary" style={{ fontSize: '12px', color: '#6b7280', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                                            <UserOutlined /> {item.author}
+                                                        </Text>
+                                                    )}
+                                                    {item.sourceUrl && (
+                                                        <Button
+                                                            size="small"
+                                                            type="link"
+                                                            icon={<GlobalOutlined />}
+                                                            href={item.sourceUrl}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            style={{
+                                                                padding: 0,
+                                                                fontSize: '12px',
+                                                                height: 'auto',
+                                                                color: '#1890ff'
+                                                            }}
+                                                            onClick={(e) => e.stopPropagation()}
+                                                        >
+                                                            Xem nguồn
+                                                        </Button>
+                                                    )}
+                                                </div>
                                             </List.Item>
                                         )
                                     }
@@ -1769,10 +3569,10 @@ function MapPage() {
                                                         <Button
                                                             size="small"
                                                             icon={<GlobalOutlined />}
-                                                            onClick={(e) => {
-                                                                e.stopPropagation()
-                                                                viewOnMap(item)
-                                                            }}
+                                                            href={getGoogleMapsLink(item.coords)}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            onClick={(e) => e.stopPropagation()}
                                                             className="map-link-button"
                                                         >
                                                             Xem trên bản đồ
@@ -1830,8 +3630,26 @@ function MapPage() {
                             </Button>
                         )}
 
-                        {/* Nút Gửi phản ánh (chỉ hiển thị khi không phải tab Đội cứu) */}
-                        {activeFilter !== 'safe' && (
+                        {/* Nút thêm điểm tiếp nhận cứu trợ (chỉ hiển thị khi tab Cứu trợ) */}
+                        {activeFilter === 'relief' && (
+                            <Button
+                                type="primary"
+                                icon={<PlusOutlined />}
+                                block
+                                size="large"
+                                style={{ marginTop: '16px', height: '48px', background: '#52c41a', borderColor: '#52c41a' }}
+                                onClick={() => {
+                                    setAddReliefPointModalVisible(true)
+                                    addReliefPointForm.resetFields()
+                                    setAddReliefPointLocation(null)
+                                }}
+                            >
+                                Thêm điểm tiếp nhận cứu trợ
+                            </Button>
+                        )}
+
+                        {/* Nút Gửi phản ánh (chỉ hiển thị khi không phải tab Đội cứu và Cứu trợ) */}
+                        {activeFilter !== 'safe' && activeFilter !== 'relief' && (
                             <Button
                                 type="primary"
                                 danger
@@ -1861,10 +3679,38 @@ function MapPage() {
                                 {...viewState}
                                 onMove={handleMapMove}
                                 onClick={handleMapClick}
+                                onLoad={(evt) => {
+                                    // Store map instance when map loads
+                                    mapInstanceRef.current = evt.target;
+                                    devLog('✅ Map loaded, setting up GeoFeatures layers...');
+
+                                    // Wait for style to load first
+                                    const setupLayersAndLoadFeatures = () => {
+                                        devLog('✅ Map style ready, setting up GeoFeatures layers...');
+                                        // Setup GeoFeatures layers after style is ready
+                                        setTimeout(() => {
+                                            setupGeoFeaturesLayers(evt.target);
+                                            // Load features after layers are setup
+                                            setTimeout(() => {
+                                                loadGeoFeaturesToMap();
+                                            }, 300);
+                                        }, 300);
+                                    };
+
+                                    if (!evt.target.isStyleLoaded || !evt.target.isStyleLoaded()) {
+                                        evt.target.once('style.load', setupLayersAndLoadFeatures);
+                                    } else {
+                                        // Style already loaded
+                                        setupLayersAndLoadFeatures();
+                                    }
+                                }}
                                 style={{ width: '100%', height: 'calc(100vh - 64px)' }}
                                 mapStyle="mapbox://styles/mapbox/streets-v12"
                                 cursor={editingRequest ? "crosshair" : "default"}
                             >
+                                {/* Radar Overlay */}
+                                <RadarOverlay visible={radarOverlayVisible} offset={0} mapInstance={mapInstanceRef.current} />
+
                                 {/* Marker khi click trên map (chỉ hiển thị khi đang edit) */}
                                 {editingRequest && clickedCoords && (
                                     <Marker
@@ -1916,8 +3762,8 @@ function MapPage() {
                                         </div>
                                     </Marker>
                                 )}
-                                {/* Markers điểm trú ẩn - chỉ hiển thị khi filter = all hoặc safe */}
-                                {(activeFilter === 'all' || activeFilter === 'safe') && safePoints
+                                {/* Markers điểm trú ẩn - chỉ hiển thị khi filter = all, safe, hoặc news (tin tức không liên quan bản đồ nên vẫn hiển thị markers) */}
+                                {(activeFilter === 'all' || activeFilter === 'safe' || activeFilter === 'news') && safePoints
                                     .filter(point => point && typeof point.lng === 'number' && typeof point.lat === 'number' &&
                                         !isNaN(point.lng) && !isNaN(point.lat) &&
                                         point.lng >= -180 && point.lng <= 180 && point.lat >= -90 && point.lat <= 90)
@@ -1935,10 +3781,29 @@ function MapPage() {
                                         </Marker>
                                     ))}
 
+                                {/* Markers điểm tiếp nhận cứu trợ - chỉ hiển thị khi filter = all, relief, hoặc news */}
+                                {(activeFilter === 'all' || activeFilter === 'relief' || activeFilter === 'news') && reliefPoints
+                                    .filter(point => point && typeof point.lng === 'number' && typeof point.lat === 'number' &&
+                                        !isNaN(point.lng) && !isNaN(point.lat) &&
+                                        point.lng >= -180 && point.lng <= 180 && point.lat >= -90 && point.lat <= 90)
+                                    .map((point) => (
+                                        <Marker
+                                            key={`relief-${point._id || point.id}`}
+                                            longitude={point.lng}
+                                            latitude={point.lat}
+                                            anchor="bottom"
+                                            onClick={() => handleMarkerClick(point, 'relief')}
+                                        >
+                                            <div className="custom-marker relief-marker">
+                                                <GiftOutlined style={{ fontSize: '20px', color: '#52c41a' }} />
+                                            </div>
+                                        </Marker>
+                                    ))}
+
                                 {/* Flood areas markers đã bị loại bỏ - không còn hiển thị */}
 
-                                {/* Water Level Station Markers - chỉ hiển thị khi filter = all hoặc waterlevel */}
-                                {(activeFilter === 'all' || activeFilter === 'waterlevel') && waterLevelStations
+                                {/* Water Level Station Markers - chỉ hiển thị khi filter = all, waterlevel, hoặc news (tin tức không liên quan bản đồ nên vẫn hiển thị markers) */}
+                                {(activeFilter === 'all' || activeFilter === 'waterlevel' || activeFilter === 'news') && waterLevelStations
                                     .filter(station => station.coordinates && station.coordinates.length >= 2)
                                     .map((station) => {
                                         const lng = parseFloat(station.coordinates[0])
@@ -1961,8 +3826,8 @@ function MapPage() {
                                         )
                                     })}
 
-                                {/* Thủy điện (Reservoir) Markers - chỉ hiển thị khi filter = all hoặc thuydien */}
-                                {(activeFilter === 'all' || activeFilter === 'thuydien') && (() => {
+                                {/* Thủy điện (Reservoir) Markers - chỉ hiển thị khi filter = all, thuydien, hoặc news (tin tức không liên quan bản đồ nên vẫn hiển thị markers) */}
+                                {(activeFilter === 'all' || activeFilter === 'thuydien' || activeFilter === 'news') && (() => {
                                     // Fallback: Nếu không có dữ liệu từ API, dùng tọa độ cố định
                                     const fallbackReservoirs = [
                                         {
@@ -2019,8 +3884,8 @@ function MapPage() {
                                         })
                                 })()}
 
-                                {/* Clustered markers cầu cứu từ người dân */}
-                                {(activeFilter === 'all' || activeFilter === 'rescue') && clusters.map((cluster) => {
+                                {/* Clustered markers cầu cứu từ người dân - chỉ hiển thị khi filter = all, rescue, hoặc news (tin tức không liên quan bản đồ nên vẫn hiển thị markers) */}
+                                {(activeFilter === 'all' || activeFilter === 'rescue' || activeFilter === 'news') && clusters.map((cluster) => {
                                     const [longitude, latitude] = cluster.geometry.coordinates
                                     const { cluster: isCluster, point_count } = cluster.properties
 
@@ -2067,7 +3932,25 @@ function MapPage() {
                                     }
                                 })}
 
-                                {/* Popup điểm trú ẩn/khu vực ngập */}
+                                {/* Markers yêu cầu hỗ trợ - marker màu xanh dương */}
+                                {supportRequests
+                                    .filter(req => req.location && req.location.lat && req.location.lng &&
+                                        (activeFilter === 'all' || activeFilter === 'support'))
+                                    .map((request) => (
+                                        <Marker
+                                            key={`support-${request._id || request.id}`}
+                                            longitude={request.location.lng}
+                                            latitude={request.location.lat}
+                                            anchor="bottom"
+                                            onClick={() => handleSupportRequestClick(request)}
+                                        >
+                                            <div className={`custom-marker support-marker ${selectedListItem === (request._id || request.id) ? 'selected-marker' : ''}`}>
+                                                <span style={{ fontSize: '22px', display: 'inline-block', lineHeight: '1' }}>🎁</span>
+                                            </div>
+                                        </Marker>
+                                    ))}
+
+                                {/* Popup điểm trú ẩn/điểm tiếp nhận cứu trợ */}
                                 {selectedPoint && (
                                     <Popup
                                         longitude={selectedPoint.lng}
@@ -2081,11 +3964,57 @@ function MapPage() {
                                     >
                                         <div className="popup-content">
                                             <Title level={5}>{selectedPoint.name}</Title>
-                                            {/* Chỉ hiển thị safe points - flood areas đã bị loại bỏ */}
                                             <Text type="secondary">{selectedPoint.address}</Text>
-                                            <div style={{ marginTop: 8 }}>
-                                                <Text>Sức chứa: {selectedPoint.capacity || 0} người</Text>
-                                            </div>
+
+                                            {/* Thông tin cho safe points */}
+                                            {selectedPoint.type === 'safe' && (
+                                                <div style={{ marginTop: 8 }}>
+                                                    <Text>Sức chứa: {selectedPoint.capacity || 'Không có thông tin'} người</Text>
+                                                    {selectedPoint.rescueType && (
+                                                        <div style={{ marginTop: 4 }}>
+                                                            <Text type="secondary">Loại: {selectedPoint.rescueType}</Text>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+
+                                            {/* Thông tin cho relief points */}
+                                            {selectedPoint.type === 'relief' && (
+                                                <div style={{ marginTop: 8 }}>
+                                                    <div>
+                                                        <Text strong>Loại cứu trợ: </Text>
+                                                        <Space wrap>
+                                                            {Array.isArray(selectedPoint.reliefType)
+                                                                ? selectedPoint.reliefType.map((type, idx) => (
+                                                                    <Tag key={idx} color="green">{type}</Tag>
+                                                                ))
+                                                                : <Tag color="green">{selectedPoint.reliefType || 'Hỗn hợp'}</Tag>
+                                                            }
+                                                        </Space>
+                                                    </div>
+                                                    {selectedPoint.capacity > 0 && (
+                                                        <div style={{ marginTop: 4 }}>
+                                                            <Text>
+                                                                Số người: {selectedPoint.currentOccupancy || 0}/{selectedPoint.capacity}
+                                                            </Text>
+                                                            {selectedPoint.currentOccupancy >= selectedPoint.capacity && (
+                                                                <Tag color="red" style={{ marginLeft: 8 }}>ĐẦY</Tag>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                    {selectedPoint.operatingHours && (
+                                                        <div style={{ marginTop: 4 }}>
+                                                            <Text type="secondary">Giờ hoạt động: {selectedPoint.operatingHours}</Text>
+                                                        </div>
+                                                    )}
+                                                    {selectedPoint.contactPerson && (
+                                                        <div style={{ marginTop: 4 }}>
+                                                            <Text type="secondary">Người phụ trách: {selectedPoint.contactPerson}</Text>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+
                                             {(selectedPoint.phone || (selectedPoint.lng && selectedPoint.lat)) && (
                                                 <Space
                                                     style={{ width: '100%', marginTop: 12 }}
@@ -2121,6 +4050,360 @@ function MapPage() {
                                         </div>
                                     </Popup>
                                 )}
+
+                                {/* Popup GeoFeature */}
+                                {selectedGeoFeature && selectedGeoFeature.geometry && (() => {
+                                    let lng, lat;
+                                    if (selectedGeoFeature.geometry.type === 'Point') {
+                                        lng = selectedGeoFeature.geometry.coordinates[0];
+                                        lat = selectedGeoFeature.geometry.coordinates[1];
+                                    } else if (selectedGeoFeature.geometry.type === 'LineString') {
+                                        const coords = selectedGeoFeature.geometry.coordinates;
+                                        lng = coords[Math.floor(coords.length / 2)][0];
+                                        lat = coords[Math.floor(coords.length / 2)][1];
+                                    } else if (selectedGeoFeature.geometry.type === 'Polygon') {
+                                        const ring = selectedGeoFeature.geometry.coordinates[0];
+                                        const midIndex = Math.floor(ring.length / 2);
+                                        lng = ring[midIndex][0];
+                                        lat = ring[midIndex][1];
+                                    }
+                                    return lng && lat ? (
+                                        <Popup
+                                            key={`geofeature-popup-${selectedGeoFeature._id || selectedGeoFeature.properties?.id}`}
+                                            longitude={lng}
+                                            latitude={lat}
+                                            anchor="bottom"
+                                            onClose={() => setSelectedGeoFeature(null)}
+                                            closeButton={true}
+                                            closeOnClick={true}
+                                            maxWidth={isMobile ? '90vw' : '450px'}
+                                            style={{ zIndex: 1000 }}
+                                        >
+                                            <div className="popup-content" style={{
+                                                maxWidth: isMobile ? '85vw' : '400px',
+                                                maxHeight: isMobile ? '50vh' : '600px',
+                                                overflowY: 'auto',
+                                                padding: isMobile ? '8px' : '12px'
+                                            }}>
+                                                <Title level={isMobile ? 4 : 5} style={{
+                                                    marginBottom: isMobile ? '8px' : '12px',
+                                                    color: '#1890ff',
+                                                    fontSize: isMobile ? '14px' : '16px'
+                                                }}>
+                                                    {selectedGeoFeature.properties?.name || 'Không có tên'}
+                                                </Title>
+                                                <Space direction="vertical" size={isMobile ? 'small' : 'middle'} style={{ width: '100%' }}>
+                                                    {/* Tags */}
+                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                                        <Tag color={
+                                                            selectedGeoFeature.properties?.category?.includes('nguy hiểm') ? 'red' :
+                                                                selectedGeoFeature.properties?.category?.includes('an toàn') ? 'green' :
+                                                                    selectedGeoFeature.properties?.category?.includes('cứu hộ') ? 'blue' :
+                                                                        'default'
+                                                        } style={{ fontSize: isMobile ? '11px' : '12px', margin: 0 }}>
+                                                            {selectedGeoFeature.properties?.category || 'N/A'}
+                                                        </Tag>
+                                                        <Tag color={
+                                                            selectedGeoFeature.properties?.severity === 'Cao' ? 'red' :
+                                                                selectedGeoFeature.properties?.severity === 'Trung bình' ? 'orange' :
+                                                                    'green'
+                                                        } style={{ fontSize: isMobile ? '11px' : '12px', margin: 0 }}>
+                                                            {selectedGeoFeature.properties?.severity || 'N/A'}
+                                                        </Tag>
+                                                        <Tag color={
+                                                            selectedGeoFeature.properties?.status === 'Hoạt động' ? 'green' :
+                                                                selectedGeoFeature.properties?.status === 'Đã xử lý' ? 'blue' :
+                                                                    'default'
+                                                        } style={{ fontSize: isMobile ? '11px' : '12px', margin: 0 }}>
+                                                            {selectedGeoFeature.properties?.status || 'N/A'}
+                                                        </Tag>
+                                                    </div>
+
+                                                    {/* Ảnh hiện trường */}
+                                                    {selectedGeoFeature.properties?.imagePath && (
+                                                        <div>
+                                                            <Text strong style={{
+                                                                display: 'block',
+                                                                marginBottom: isMobile ? '6px' : '8px',
+                                                                fontSize: isMobile ? '12px' : '13px'
+                                                            }}>
+                                                                📸 Ảnh hiện trường:
+                                                            </Text>
+                                                            <div style={{
+                                                                width: '100%',
+                                                                display: 'flex',
+                                                                justifyContent: 'center',
+                                                                alignItems: 'center',
+                                                                backgroundColor: '#f5f5f5',
+                                                                borderRadius: '6px',
+                                                                padding: isMobile ? '6px' : '8px',
+                                                                minHeight: isMobile ? '120px' : '150px',
+                                                                maxHeight: isMobile ? '200px' : '300px',
+                                                                overflow: 'hidden',
+                                                                border: '1px solid #e8e8e8'
+                                                            }}>
+                                                                <img
+                                                                    src={
+                                                                        selectedGeoFeature.properties.imagePath.startsWith('http')
+                                                                            ? selectedGeoFeature.properties.imagePath
+                                                                            : `${API_URL}${selectedGeoFeature.properties.imagePath}`
+                                                                    }
+                                                                    alt={selectedGeoFeature.properties?.name || 'Ảnh hiện trường'}
+                                                                    style={{
+                                                                        maxWidth: '100%',
+                                                                        maxHeight: '100%',
+                                                                        width: 'auto',
+                                                                        height: 'auto',
+                                                                        objectFit: 'contain',
+                                                                        borderRadius: '4px',
+                                                                        cursor: 'pointer'
+                                                                    }}
+                                                                    onClick={() => {
+                                                                        const imageUrl = selectedGeoFeature.properties.imagePath.startsWith('http')
+                                                                            ? selectedGeoFeature.properties.imagePath
+                                                                            : `${API_URL}${selectedGeoFeature.properties.imagePath}`;
+                                                                        window.open(imageUrl, '_blank');
+                                                                    }}
+                                                                    onError={(e) => {
+                                                                        const parent = e.target.parentElement;
+                                                                        parent.innerHTML = '<div style="text-align: center; color: #999; padding: 20px; font-size: 12px;">⚠️ Không thể tải ảnh</div>';
+                                                                    }}
+                                                                />
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    {/* Mô tả */}
+                                                    {selectedGeoFeature.properties?.description && (
+                                                        <div>
+                                                            <Text strong style={{
+                                                                display: 'block',
+                                                                marginBottom: '4px',
+                                                                fontSize: isMobile ? '12px' : '13px'
+                                                            }}>
+                                                                📝 Mô tả:
+                                                            </Text>
+                                                            <Text style={{
+                                                                display: 'block',
+                                                                padding: isMobile ? '6px' : '8px',
+                                                                backgroundColor: '#f9f9f9',
+                                                                borderRadius: '4px',
+                                                                whiteSpace: 'pre-wrap',
+                                                                wordBreak: 'break-word',
+                                                                fontSize: isMobile ? '11px' : '12px',
+                                                                maxHeight: isMobile ? '100px' : 'none',
+                                                                overflowY: isMobile ? 'auto' : 'visible'
+                                                            }}>
+                                                                {selectedGeoFeature.properties.description}
+                                                            </Text>
+                                                        </div>
+                                                    )}
+
+                                                    {/* Ghi chú */}
+                                                    {selectedGeoFeature.properties?.notes && (
+                                                        <div>
+                                                            <Text strong style={{
+                                                                display: 'block',
+                                                                marginBottom: '4px',
+                                                                fontSize: isMobile ? '12px' : '13px'
+                                                            }}>
+                                                                📌 Ghi chú:
+                                                            </Text>
+                                                            <Text style={{
+                                                                display: 'block',
+                                                                padding: isMobile ? '6px' : '8px',
+                                                                backgroundColor: '#fffbe6',
+                                                                borderRadius: '4px',
+                                                                whiteSpace: 'pre-wrap',
+                                                                wordBreak: 'break-word',
+                                                                fontSize: isMobile ? '11px' : '12px',
+                                                                maxHeight: isMobile ? '80px' : 'none',
+                                                                overflowY: isMobile ? 'auto' : 'visible'
+                                                            }}>
+                                                                {selectedGeoFeature.properties.notes}
+                                                            </Text>
+                                                        </div>
+                                                    )}
+
+                                                    {/* Thông tin bổ sung */}
+                                                    <div style={{
+                                                        borderTop: '1px solid #e8e8e8',
+                                                        paddingTop: isMobile ? '6px' : '8px'
+                                                    }}>
+                                                        <Text type="secondary" style={{
+                                                            fontSize: isMobile ? '10px' : '11px',
+                                                            display: 'block'
+                                                        }}>
+                                                            {selectedGeoFeature.geometry?.type === 'Point' ? '📍 Điểm' :
+                                                                selectedGeoFeature.geometry?.type === 'LineString' ? '📏 Đường' :
+                                                                    selectedGeoFeature.geometry?.type === 'Polygon' ? '🔷 Vùng' : 'N/A'}
+                                                        </Text>
+                                                        {selectedGeoFeature.properties?.createdAt && (
+                                                            <Text type="secondary" style={{
+                                                                fontSize: isMobile ? '10px' : '11px',
+                                                                display: 'block',
+                                                                marginTop: '4px'
+                                                            }}>
+                                                                🕐 {isMobile ? new Date(selectedGeoFeature.properties.createdAt).toLocaleDateString('vi-VN') : new Date(selectedGeoFeature.properties.createdAt).toLocaleString('vi-VN')}
+                                                            </Text>
+                                                        )}
+                                                    </div>
+                                                </Space>
+                                            </div>
+                                        </Popup>
+                                    ) : null;
+                                })()}
+
+                                {/* Popup yêu cầu hỗ trợ */}
+                                {selectedSupportRequest && selectedSupportRequest.location &&
+                                    selectedSupportRequest.location.lat != null &&
+                                    selectedSupportRequest.location.lng != null && (
+                                        <Popup
+                                            key={`support-popup-${selectedSupportRequest._id || selectedSupportRequest.id}`}
+                                            longitude={selectedSupportRequest.location.lng}
+                                            latitude={selectedSupportRequest.location.lat}
+                                            anchor="bottom"
+                                            onClose={() => {
+                                                console.log('🔵 Closing support popup')
+                                                setSelectedSupportRequest(null)
+                                            }}
+                                            closeButton={true}
+                                            closeOnClick={false}
+                                            maxWidth={isMobile ? '90vw' : '450px'}
+                                            style={{ zIndex: 1001 }}
+                                        >
+                                            <div className="popup-content" style={{
+                                                maxWidth: isMobile ? '85vw' : '400px',
+                                                maxHeight: isMobile ? '50vh' : '600px',
+                                                overflowY: 'auto',
+                                                padding: isMobile ? '8px' : '12px'
+                                            }}>
+                                                <Title level={isMobile ? 4 : 5} style={{
+                                                    marginBottom: isMobile ? '8px' : '12px',
+                                                    color: '#1890ff',
+                                                    fontSize: isMobile ? '14px' : '16px'
+                                                }}>
+                                                    🎁 {selectedSupportRequest.name || 'Yêu cầu hỗ trợ'}
+                                                </Title>
+                                                <Space direction="vertical" size={isMobile ? 'small' : 'middle'} style={{ width: '100%' }}>
+                                                    {/* Tags */}
+                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                                        {selectedSupportRequest.needs && selectedSupportRequest.needs.map((need, idx) => (
+                                                            <Tag key={idx} color="blue" style={{ fontSize: isMobile ? '11px' : '12px', margin: 0 }}>
+                                                                {need}
+                                                            </Tag>
+                                                        ))}
+                                                        <Tag color={
+                                                            selectedSupportRequest.status === 'Chưa xử lý' ? 'red' :
+                                                                selectedSupportRequest.status === 'Đang xử lý' ? 'orange' :
+                                                                    'green'
+                                                        } style={{ fontSize: isMobile ? '11px' : '12px', margin: 0 }}>
+                                                            {selectedSupportRequest.status || 'Chưa xử lý'}
+                                                        </Tag>
+                                                    </div>
+
+                                                    {/* Ảnh */}
+                                                    {selectedSupportRequest.imagePath && (
+                                                        <div>
+                                                            <Text strong style={{
+                                                                display: 'block',
+                                                                marginBottom: isMobile ? '6px' : '8px',
+                                                                fontSize: isMobile ? '12px' : '13px'
+                                                            }}>
+                                                                📸 Ảnh:
+                                                            </Text>
+                                                            <div style={{
+                                                                width: '100%',
+                                                                display: 'flex',
+                                                                justifyContent: 'center',
+                                                                alignItems: 'center',
+                                                                backgroundColor: '#f5f5f5',
+                                                                borderRadius: '6px',
+                                                                padding: isMobile ? '6px' : '8px',
+                                                                minHeight: isMobile ? '120px' : '150px',
+                                                                maxHeight: isMobile ? '200px' : '300px',
+                                                                overflow: 'hidden',
+                                                                border: '1px solid #e8e8e8'
+                                                            }}>
+                                                                <img
+                                                                    src={
+                                                                        selectedSupportRequest.imagePath.startsWith('http')
+                                                                            ? selectedSupportRequest.imagePath
+                                                                            : `${API_URL}${selectedSupportRequest.imagePath}`
+                                                                    }
+                                                                    alt="Ảnh yêu cầu hỗ trợ"
+                                                                    style={{
+                                                                        maxWidth: '100%',
+                                                                        maxHeight: '100%',
+                                                                        width: 'auto',
+                                                                        height: 'auto',
+                                                                        objectFit: 'contain',
+                                                                        borderRadius: '4px',
+                                                                        cursor: 'pointer'
+                                                                    }}
+                                                                    onClick={() => {
+                                                                        const imageUrl = selectedSupportRequest.imagePath.startsWith('http')
+                                                                            ? selectedSupportRequest.imagePath
+                                                                            : `${API_URL}${selectedSupportRequest.imagePath}`;
+                                                                        window.open(imageUrl, '_blank');
+                                                                    }}
+                                                                    onError={(e) => {
+                                                                        const parent = e.target.parentElement;
+                                                                        parent.innerHTML = '<div style="text-align: center; color: #999; padding: 20px; font-size: 12px;">⚠️ Không thể tải ảnh</div>';
+                                                                    }}
+                                                                />
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    {/* Mô tả */}
+                                                    {selectedSupportRequest.description && (
+                                                        <div>
+                                                            <Text strong style={{
+                                                                display: 'block',
+                                                                marginBottom: '4px',
+                                                                fontSize: isMobile ? '12px' : '13px'
+                                                            }}>
+                                                                📝 Mô tả:
+                                                            </Text>
+                                                            <Text style={{
+                                                                display: 'block',
+                                                                padding: isMobile ? '6px' : '8px',
+                                                                backgroundColor: '#f9f9f9',
+                                                                borderRadius: '4px',
+                                                                whiteSpace: 'pre-wrap',
+                                                                wordBreak: 'break-word',
+                                                                fontSize: isMobile ? '11px' : '12px',
+                                                                maxHeight: isMobile ? '100px' : 'none',
+                                                                overflowY: isMobile ? 'auto' : 'visible'
+                                                            }}>
+                                                                {selectedSupportRequest.description}
+                                                            </Text>
+                                                        </div>
+                                                    )}
+
+                                                    {/* Thông tin bổ sung */}
+                                                    <div style={{ borderTop: '1px solid #e8e8e8', paddingTop: isMobile ? '6px' : '8px' }}>
+                                                        {selectedSupportRequest.peopleCount && (
+                                                            <Text strong style={{ fontSize: isMobile ? '12px' : '13px', display: 'block', color: '#262626' }}>
+                                                                👥 Số người: <span style={{ color: '#1890ff', fontWeight: 600 }}>{selectedSupportRequest.peopleCount}</span>
+                                                            </Text>
+                                                        )}
+                                                        {selectedSupportRequest.phone && (
+                                                            <Text strong style={{ fontSize: isMobile ? '12px' : '13px', display: 'block', marginTop: '6px', color: '#262626' }}>
+                                                                📞 <span style={{ color: '#1890ff', fontWeight: 600 }}>{selectedSupportRequest.phone}</span>
+                                                            </Text>
+                                                        )}
+                                                        {selectedSupportRequest.createdAt && (
+                                                            <Text style={{ fontSize: isMobile ? '11px' : '12px', display: 'block', marginTop: '6px', color: '#595959', fontWeight: 500 }}>
+                                                                🕐 {isMobile ? new Date(selectedSupportRequest.createdAt).toLocaleDateString('vi-VN') : new Date(selectedSupportRequest.createdAt).toLocaleString('vi-VN')}
+                                                            </Text>
+                                                        )}
+                                                    </div>
+                                                </Space>
+                                            </div>
+                                        </Popup>
+                                    )}
 
                                 {/* Popup thủy điện */}
                                 {selectedThuydien && selectedThuydien.coordinates && selectedThuydien.coordinates.lat && selectedThuydien.coordinates.lng && (
@@ -2270,7 +4553,7 @@ function MapPage() {
                                                             </Button>
                                                         )}
                                                         {/* Thời gian */}
-                                                        <Text type="secondary" style={{ fontSize: '12px', marginTop: 8 }}>
+                                                        <Text style={{ fontSize: '13px', marginTop: 8, color: '#595959', fontWeight: 500 }}>
                                                             ⏰ {formatTime(selectedRescue.timestamp)}
                                                         </Text>
 
@@ -2339,10 +4622,14 @@ function MapPage() {
 
                                                         <Space direction="vertical" size="small" style={{ width: '100%', marginTop: 8 }}>
                                                             {selectedRescue.people && (
-                                                                <Text type="secondary">👥 {selectedRescue.people}</Text>
+                                                                <Text strong style={{ fontSize: '13px', color: '#262626' }}>
+                                                                    👥 {selectedRescue.people}
+                                                                </Text>
                                                             )}
                                                             {selectedRescue.needs && (
-                                                                <Text type="secondary">📦 {selectedRescue.needs}</Text>
+                                                                <Text strong style={{ fontSize: '13px', color: '#262626' }}>
+                                                                    📦 {selectedRescue.needs}
+                                                                </Text>
                                                             )}
 
                                                             {(selectedRescue.contactFull || selectedRescue.contact) && (
@@ -2360,7 +4647,7 @@ function MapPage() {
                                                                 </Button>
                                                             )}
 
-                                                            <Text type="secondary" style={{ fontSize: '12px' }}>
+                                                            <Text style={{ fontSize: '13px', color: '#595959', fontWeight: 500 }}>
                                                                 ⏰ {formatTime(selectedRescue.timestamp)}
                                                             </Text>
 
@@ -2400,6 +4687,110 @@ function MapPage() {
                                     </Popup>
                                 )}
                             </Map>
+
+                            {/* dBZ Legend - Chỉ hiển thị khi radar overlay được bật */}
+                            {radarOverlayVisible && (
+                                <div
+                                    key="radar-legend"
+                                    style={{
+                                        position: 'absolute',
+                                        ...(isMobile
+                                            ? { top: '20px', left: '50%', transform: 'translateX(-50%)' }
+                                            : { bottom: '20px', left: '50%', transform: 'translateX(-50%)' }
+                                        ),
+                                        background: 'rgba(0, 0, 0, 0.6)',
+                                        padding: '10px 14px',
+                                        borderRadius: '12px',
+                                        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+                                        zIndex: 1000,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '12px',
+                                        minWidth: '320px',
+                                        maxWidth: '90%',
+                                        backdropFilter: 'blur(4px)',
+                                        border: '1px solid rgba(255, 255, 255, 0.2)',
+                                        cursor: 'pointer'
+                                    }}
+                                    onClick={() => setRadarUnit(radarUnit === 'dBZ' ? 'mm/h' : 'dBZ')}
+                                    title="Nhấp để thay đổi đơn vị"
+                                >
+                                    {/* Label - Màu trắng, có thể click */}
+                                    <div style={{
+                                        color: '#ffffff',
+                                        fontSize: '14px',
+                                        fontWeight: 700,
+                                        whiteSpace: 'nowrap',
+                                        textShadow: '0 1px 2px rgba(0, 0, 0, 0.5)',
+                                        fontFamily: 'Arial, sans-serif',
+                                        userSelect: 'none'
+                                    }}>
+                                        {radarUnit}
+                                    </div>
+
+                                    {/* Color Gradient Bar - Gradient chuẩn từ HTML */}
+                                    <div style={{
+                                        flex: 1,
+                                        height: '24px',
+                                        borderRadius: '12px',
+                                        position: 'relative',
+                                        overflow: 'hidden',
+                                        boxShadow: 'inset 0 2px 4px rgba(0, 0, 0, 0.1)',
+                                        background: `linear-gradient(to right, ${RADAR_GRADIENT_STOPS})`
+                                    }}>
+                                        {/* Value labels - đặt chính xác tại các vị trí dựa trên gradient color stops */}
+                                        {radarDisplayValues.map((value, index) => {
+                                            // Vị trí chính xác dựa trên gradient color stops (15 stops = 14 intervals)
+                                            // Mỗi stop cách nhau: 100 / 14 = 7.142857%
+                                            // 0: index 0 (0%), 20: index 5 (35.71%), 30: index 7 (50%), 
+                                            // 40: index 9 (64.29%), 50: index 11 (78.57%), 60: index 13 (92.86%)
+                                            const positionMap = {
+                                                0: 0,           // Bắt đầu gradient (index 0)
+                                                20: (5 / 14) * 100,      // ~35.71% - rgb(0, 145, 148) - teal (index 5)
+                                                30: (7 / 14) * 100,      // 50% - rgb(70, 205, 96) - green (index 7)
+                                                40: (9 / 14) * 100,      // ~64.29% - rgb(245, 203, 8) - yellow (index 9)
+                                                50: (11 / 14) * 100,     // ~78.57% - rgb(223, 102, 68) - orange-red (index 11)
+                                                60: (13 / 14) * 100      // ~92.86% - rgb(157, 16, 109) - magenta (index 13)
+                                            }
+
+                                            const dbzValue = DBZ_VALUES[index]
+                                            const position = positionMap[dbzValue] || (dbzValue / 60) * 100
+
+                                            // Số 0 cần căn trái và đẩy sang phải, các số khác căn giữa
+                                            const isFirst = value === 0 || (radarUnit === 'mm/h' && value === 0)
+                                            const transform = isFirst ? 'translate(0, -50%)' : 'translate(-50%, -50%)'
+
+                                            // Đẩy số 0 sang phải thêm 3 lần (khoảng 9-12px) để không bị mất
+                                            const leftOffset = isFirst ? '20px' : '0'
+
+                                            return (
+                                                <div
+                                                    key={`${radarUnit}-${value}-${index}`}
+                                                    style={{
+                                                        position: 'absolute',
+                                                        top: '50%',
+                                                        left: isFirst ? `calc(${position}% + ${leftOffset})` : `${position}%`,
+                                                        transform: transform,
+                                                        color: '#ffffff',
+                                                        fontSize: '12px',
+                                                        fontWeight: 700,
+                                                        textShadow: '0 1px 4px rgba(0, 0, 0, 1), 0 0 3px rgba(0, 0, 0, 0.8)',
+                                                        pointerEvents: 'none',
+                                                        whiteSpace: 'nowrap',
+                                                        fontFamily: 'Arial, sans-serif',
+                                                        userSelect: 'none',
+                                                        letterSpacing: '0.5px',
+                                                        lineHeight: '1',
+                                                        textAlign: isFirst ? 'left' : 'center'
+                                                    }}
+                                                >
+                                                    {value}
+                                                </div>
+                                            )
+                                        })}
+                                    </div>
+                                </div>
+                            )}
                         </>
                     )}
                 </Content>
@@ -2524,6 +4915,131 @@ function MapPage() {
                 )}
             </Modal>
 
+            {/* News Detail Modal - Xem toàn bộ nội dung tin tức */}
+            <Modal
+                title={
+                    selectedNewsItem ? (
+                        <div>
+                            <div style={{ fontSize: '20px', fontWeight: 700, marginBottom: '8px' }}>
+                                {selectedNewsItem.title}
+                            </div>
+                            <Space>
+                                <Tag color={selectedNewsItem.category === 'thông báo khẩn' ? 'red' : selectedNewsItem.category === 'hướng dẫn' ? 'blue' : 'green'}>
+                                    {selectedNewsItem.category === 'thông báo khẩn' ? 'Thông báo khẩn' : selectedNewsItem.category === 'hướng dẫn' ? 'Hướng dẫn' : 'Cập nhật tình hình'}
+                                </Tag>
+                                {selectedNewsItem.timestamp && (
+                                    <Text type="secondary" style={{ fontSize: '12px' }}>
+                                        <ClockCircleOutlined style={{ marginRight: '4px' }} />
+                                        {formatTime(selectedNewsItem.timestamp)}
+                                    </Text>
+                                )}
+                            </Space>
+                        </div>
+                    ) : 'Chi tiết tin tức'
+                }
+                open={newsDetailModalVisible}
+                onCancel={() => {
+                    setNewsDetailModalVisible(false)
+                    setSelectedNewsItem(null)
+                }}
+                footer={[
+                    <Button key="close" onClick={() => {
+                        setNewsDetailModalVisible(false)
+                        setSelectedNewsItem(null)
+                    }}>
+                        Đóng
+                    </Button>
+                ]}
+                width={isMobile ? '90%' : 800}
+                style={{ top: isMobile ? 20 : 50 }}
+                zIndex={3000}
+                getContainer={() => document.body}
+                maskClosable={true}
+                destroyOnClose={false}
+            >
+                {selectedNewsItem && (
+                    <div style={{ maxHeight: '70vh', overflowY: 'auto' }}>
+                        {/* Hình ảnh */}
+                        {selectedNewsItem.imageUrl && (
+                            <div style={{
+                                marginBottom: '20px',
+                                borderRadius: '10px',
+                                overflow: 'hidden',
+                                width: '100%',
+                                maxHeight: '400px',
+                                background: '#f5f5f5',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center'
+                            }}>
+                                <Image
+                                    src={selectedNewsItem.imageUrl}
+                                    alt={selectedNewsItem.title}
+                                    preview={{
+                                        mask: '🔍 Xem ảnh',
+                                        maskClassName: 'news-image-preview-mask'
+                                    }}
+                                    style={{
+                                        width: '100%',
+                                        height: 'auto',
+                                        maxHeight: '400px',
+                                        objectFit: 'contain'
+                                    }}
+                                />
+                            </div>
+                        )}
+
+                        {/* Nội dung đầy đủ */}
+                        <div style={{
+                            fontSize: '15px',
+                            color: '#374151',
+                            lineHeight: '1.8',
+                            whiteSpace: 'pre-wrap',
+                            wordWrap: 'break-word',
+                            marginBottom: '20px'
+                        }}>
+                            {selectedNewsItem.content}
+                        </div>
+
+                        {/* Footer: Tác giả và Link nguồn */}
+                        <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            marginTop: '20px',
+                            paddingTop: '20px',
+                            borderTop: '1px solid #e5e7eb',
+                            flexWrap: 'wrap',
+                            gap: '12px'
+                        }}>
+                            {selectedNewsItem.author && (
+                                <Text type="secondary" style={{ fontSize: '13px', color: '#6b7280', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                    <UserOutlined /> {selectedNewsItem.author}
+                                </Text>
+                            )}
+                            {selectedNewsItem.sourceUrl && (
+                                <Button
+                                    size="small"
+                                    type="link"
+                                    icon={<GlobalOutlined />}
+                                    href={selectedNewsItem.sourceUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style={{
+                                        padding: 0,
+                                        fontSize: '13px',
+                                        height: 'auto',
+                                        color: '#1890ff'
+                                    }}
+                                >
+                                    Xem nguồn
+                                </Button>
+                            )}
+                        </div>
+                    </div>
+                )}
+            </Modal>
+
             {/* Mobile Sidebar Overlay */}
             {sidebarOpen && isMobile && (
                 <div
@@ -2542,6 +5058,60 @@ function MapPage() {
 
             {/* Floating Action Buttons - Map Controls */}
             <div className="fab-container">
+                {/* Radar Overlay Toggle - Đặt đầu tiên */}
+                <button
+                    className={`fab-button ${radarOverlayVisible ? 'primary' : 'secondary'}`}
+                    onClick={() => {
+                        setRadarOverlayVisible(!radarOverlayVisible)
+                        message.info(radarOverlayVisible ? 'Đã tắt lớp radar' : 'Đã bật lớp radar')
+                    }}
+                    title={radarOverlayVisible ? 'Tắt radar' : 'Bật radar'}
+                    style={radarOverlayVisible ? {
+                        background: 'linear-gradient(135deg, #1890ff 0%, #096dd9 100%)',
+                        boxShadow: '0 4px 12px rgba(24, 144, 255, 0.4)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '2px'
+                    } : {
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '2px'
+                    }}
+                >
+                    <CloudOutlined style={{ fontSize: '18px' }} />
+                    <span style={{ fontSize: '10px', lineHeight: '1', fontWeight: 500 }}>Radar</span>
+                </button>
+
+                {/* Support Request Button */}
+                <button
+                    className="fab-button primary"
+                    onClick={openSupportRequestModal}
+                    title="Gửi yêu cầu hỗ trợ"
+                    style={{
+                        background: 'linear-gradient(135deg, #1890ff 0%, #096dd9 100%)',
+                        boxShadow: '0 4px 12px rgba(24, 144, 255, 0.4)'
+                    }}
+                >
+                    <GiftOutlined style={{ fontSize: '20px' }} />
+                </button>
+
+                {/* Hotline Button */}
+                <button
+                    className="fab-button primary"
+                    onClick={openHotlineModal}
+                    title="Danh sách hotline cứu hộ"
+                    style={{
+                        background: 'linear-gradient(135deg, #52c41a 0%, #389e0d 100%)',
+                        boxShadow: '0 4px 12px rgba(82, 196, 26, 0.4)'
+                    }}
+                >
+                    <PhoneOutlined style={{ fontSize: '20px' }} />
+                </button>
+
                 {/* Filter/Sidebar Toggle (Mobile only) */}
                 {isMobile && (
                     <button
@@ -2556,7 +5126,6 @@ function MapPage() {
                         )}
                     </button>
                 )}
-
 
                 {/* Locate User */}
                 <button
@@ -2784,6 +5353,379 @@ function MapPage() {
                             style={{ height: '50px', fontSize: '16px' }}
                         >
                             Gửi Báo Cáo Khẩn Cấp
+                        </Button>
+                    </Form.Item>
+                </Form>
+            </Modal>
+
+            {/* Hotline Modal */}
+            <Modal
+                title={
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <PhoneOutlined style={{ color: '#52c41a', fontSize: '20px' }} />
+                        <span>Danh Sách Hotline Cứu Hộ Khẩn Cấp</span>
+                    </div>
+                }
+                open={hotlineModalVisible}
+                onCancel={closeHotlineModal}
+                footer={null}
+                width={isMobile ? '90%' : 800}
+                style={{ top: isMobile ? 20 : 50 }}
+                zIndex={3000}
+                getContainer={() => document.body}
+                maskClosable={true}
+                destroyOnClose={false}
+            >
+                <Alert
+                    message="Gọi ngay các số hotline dưới đây nếu bạn đang gặp nguy hiểm!"
+                    type="error"
+                    showIcon
+                    icon={<ExclamationCircleOutlined />}
+                    style={{ marginBottom: 16 }}
+                />
+
+                {hotlineLoading ? (
+                    <div style={{ textAlign: 'center', padding: '40px' }}>
+                        <Spin size="large" />
+                    </div>
+                ) : hotlines && hotlines.length > 0 ? (
+                    <List
+                        dataSource={hotlines}
+                        renderItem={(hotline) => {
+                            const hotlineId = hotline._id || hotline.id;
+                            const hasImage = hotline.imageUrl && hotline.imageUrl.trim() !== '';
+
+                            return (
+                                <List.Item
+                                    key={hotlineId}
+                                    style={{
+                                        padding: '16px',
+                                        marginBottom: '12px',
+                                        borderRadius: '8px',
+                                        border: '1px solid #f0f0f0',
+                                        background: '#fff',
+                                        transition: 'all 0.2s'
+                                    }}
+                                    onMouseEnter={(e) => {
+                                        e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.1)'
+                                        e.currentTarget.style.borderColor = '#52c41a'
+                                    }}
+                                    onMouseLeave={(e) => {
+                                        e.currentTarget.style.boxShadow = 'none'
+                                        e.currentTarget.style.borderColor = '#f0f0f0'
+                                    }}
+                                >
+                                    <div style={{ width: '100%' }}>
+                                        {hasImage ? (
+                                            <div style={{ marginBottom: '12px' }}>
+                                                <Image
+                                                    src={hotline.imageUrl.startsWith('http')
+                                                        ? hotline.imageUrl
+                                                        : `${API_URL}${hotline.imageUrl}`
+                                                    }
+                                                    alt={hotline.unit || 'Hotline'}
+                                                    preview={false}
+                                                    style={{
+                                                        width: '100%',
+                                                        maxHeight: '200px',
+                                                        objectFit: 'contain',
+                                                        borderRadius: '4px'
+                                                    }}
+                                                    onError={(e) => {
+                                                        e.target.style.display = 'none';
+                                                    }}
+                                                />
+                                            </div>
+                                        ) : null}
+
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
+                                            <div style={{ flex: 1, minWidth: '200px' }}>
+                                                <div style={{ marginBottom: '8px' }}>
+                                                    <Text strong style={{ fontSize: '16px', color: '#dc2626' }}>
+                                                        {hotline.unit || 'Hotline'}
+                                                    </Text>
+                                                </div>
+                                                {hotline.province && (
+                                                    <div style={{ marginBottom: '4px' }}>
+                                                        <Text type="secondary" style={{ fontSize: '12px' }}>
+                                                            📍 {hotline.province}
+                                                        </Text>
+                                                    </div>
+                                                )}
+                                                {hotline.note && (
+                                                    <div style={{ marginTop: '8px' }}>
+                                                        <Text type="secondary" style={{ fontSize: '12px' }}>
+                                                            {hotline.note}
+                                                        </Text>
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px' }}>
+                                                <Button
+                                                    type="primary"
+                                                    size="large"
+                                                    icon={<PhoneOutlined />}
+                                                    href={`tel:${hotline.phone.replace(/\./g, '').trim()}`}
+                                                    style={{
+                                                        background: 'linear-gradient(135deg, #52c41a 0%, #389e0d 100%)',
+                                                        border: 'none',
+                                                        boxShadow: '0 2px 8px rgba(82, 196, 26, 0.3)',
+                                                        fontWeight: 600,
+                                                        minWidth: '150px'
+                                                    }}
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                    }}
+                                                >
+                                                    {hotline.phone}
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </List.Item>
+                            );
+                        }}
+                    />
+                ) : (
+                    <Empty
+                        description="Chưa có hotline nào được thêm vào hệ thống"
+                        image={Empty.PRESENTED_IMAGE_SIMPLE}
+                    />
+                )}
+            </Modal>
+
+            {/* Support Request Modal */}
+            <Modal
+                title="Gửi Yêu Cầu Hỗ Trợ"
+                open={supportRequestModalVisible}
+                onCancel={closeSupportRequestModal}
+                footer={null}
+                width={isMobile ? '90%' : 600}
+                style={{ top: isMobile ? 20 : 50 }}
+                zIndex={3000}
+                getContainer={() => document.body}
+                maskClosable={true}
+                destroyOnClose={false}
+            >
+                <Form
+                    form={supportRequestForm}
+                    layout="vertical"
+                    onFinish={handleSupportRequestSubmit}
+                    autoComplete="off"
+                >
+                    <Form.Item
+                        label="Họ và tên (tùy chọn)"
+                        name="name"
+                        rules={[{ max: 100, message: 'Họ tên không được quá 100 ký tự!' }]}
+                    >
+                        <Input
+                            placeholder="Nhập họ tên của bạn"
+                            maxLength={100}
+                            showCount
+                        />
+                    </Form.Item>
+
+                    <Form.Item
+                        label="Số điện thoại (tùy chọn)"
+                        name="phone"
+                        rules={[{ max: 20, message: 'Số điện thoại không được quá 20 ký tự!' }]}
+                    >
+                        <Input
+                            placeholder="Nhập số điện thoại để đội hỗ trợ liên hệ"
+                            maxLength={20}
+                            showCount
+                        />
+                    </Form.Item>
+
+                    <Form.Item
+                        label="Loại hỗ trợ cần thiết"
+                        name="needs"
+                        rules={[{ required: true, message: 'Vui lòng chọn ít nhất một loại hỗ trợ!' }]}
+                    >
+                        <Checkbox.Group
+                            options={[
+                                { label: '🍞 Thực phẩm', value: 'Thực phẩm' },
+                                { label: '💧 Nước uống', value: 'Nước uống' },
+                                { label: '👕 Quần áo', value: 'Quần áo' },
+                                { label: '💊 Thuốc men', value: 'Thuốc men' },
+                                { label: '🛏️ Chăn màn', value: 'Chăn màn' },
+                                { label: '🔦 Đèn pin', value: 'Đèn pin' },
+                                { label: '🔋 Pin', value: 'Pin' },
+                                { label: '🔥 Bếp gas', value: 'Bếp gas' },
+                                { label: '🧴 Nhu yếu phẩm', value: 'Nhu yếu phẩm' },
+                                { label: '📝 Khác', value: 'Khác' }
+                            ]}
+                        />
+                    </Form.Item>
+
+                    <Form.Item
+                        label="Số lượng người cần hỗ trợ"
+                        name="peopleCount"
+                        rules={[{ required: true, message: 'Vui lòng nhập số lượng người!' }]}
+                        initialValue={1}
+                    >
+                        <Input
+                            type="number"
+                            min={1}
+                            placeholder="Nhập số lượng người"
+                        />
+                    </Form.Item>
+
+                    <Form.Item
+                        label="Link Google Maps (tùy chọn - để lấy tọa độ chính xác)"
+                        help="Paste link Google Maps để tự động lấy tọa độ. Hệ thống sẽ ưu tiên dùng tọa độ này."
+                    >
+                        <Input
+                            placeholder="https://www.google.com/maps?q=13.08,109.30 hoặc https://maps.google.com/@13.08,109.30"
+                            prefix={<GlobalOutlined />}
+                            allowClear
+                            value={supportRequestGoogleMapsUrl}
+                            onChange={handleSupportRequestGoogleMapsLinkChange}
+                        />
+                    </Form.Item>
+
+                    {supportRequestParsedCoords && (
+                        <Alert
+                            message={`✅ Đã tìm thấy tọa độ: ${supportRequestParsedCoords.lat.toFixed(6)}, ${supportRequestParsedCoords.lng.toFixed(6)}`}
+                            type="success"
+                            showIcon
+                            style={{ marginBottom: 16 }}
+                            closable
+                            onClose={() => {
+                                setSupportRequestParsedCoords(null)
+                                setSupportRequestGoogleMapsUrl('')
+                                supportRequestForm.setFieldsValue({ googleMapsUrl: '' })
+                            }}
+                        />
+                    )}
+
+                    <Form.Item
+                        label="Vị trí GPS"
+                        help="Chọn vị trí trên bản đồ hoặc dùng GPS tự động"
+                    >
+                        <Space direction="vertical" style={{ width: '100%' }} size="middle">
+                            <Space wrap>
+                                <Button
+                                    icon={<EnvironmentOutlined />}
+                                    onClick={handleGetCurrentLocationForSupportRequest}
+                                    loading={supportRequestLoading}
+                                >
+                                    Lấy GPS Tự Động
+                                </Button>
+                                <Button
+                                    icon={<AimOutlined />}
+                                    onClick={() => {
+                                        setLocationPickerContext('supportRequest')
+                                        setLocationPickerModalVisible(true)
+                                        if (supportRequestLocation) {
+                                            setLocationPickerViewState({
+                                                longitude: supportRequestLocation.lng,
+                                                latitude: supportRequestLocation.lat,
+                                                zoom: 15
+                                            })
+                                            setLocationPickerSelected(supportRequestLocation)
+                                        } else if (viewState.latitude && viewState.longitude) {
+                                            setLocationPickerViewState({
+                                                longitude: viewState.longitude,
+                                                latitude: viewState.latitude,
+                                                zoom: 15
+                                            })
+                                            setLocationPickerSelected(null)
+                                        } else {
+                                            if (navigator.geolocation) {
+                                                navigator.geolocation.getCurrentPosition(
+                                                    (position) => {
+                                                        const newLocation = {
+                                                            lat: position.coords.latitude,
+                                                            lng: position.coords.longitude
+                                                        }
+                                                        setLocationPickerViewState({
+                                                            longitude: newLocation.lng,
+                                                            latitude: newLocation.lat,
+                                                            zoom: 15
+                                                        })
+                                                        setLocationPickerSelected(null)
+                                                    },
+                                                    () => {
+                                                        setLocationPickerViewState({
+                                                            longitude: 108.9,
+                                                            latitude: 13.0,
+                                                            zoom: 10
+                                                        })
+                                                        setLocationPickerSelected(null)
+                                                    }
+                                                )
+                                            } else {
+                                                setLocationPickerViewState({
+                                                    longitude: 108.9,
+                                                    latitude: 13.0,
+                                                    zoom: 10
+                                                })
+                                                setLocationPickerSelected(null)
+                                            }
+                                        }
+                                    }}
+                                    type="default"
+                                >
+                                    Chọn Trên Bản Đồ
+                                </Button>
+                                {supportRequestLocation && (
+                                    <Tag color="green">
+                                        ✓ Đã chọn: {supportRequestLocation.lat.toFixed(6)}, {supportRequestLocation.lng.toFixed(6)}
+                                    </Tag>
+                                )}
+                            </Space>
+                        </Space>
+                    </Form.Item>
+
+                    <Form.Item
+                        label="Mô tả nhu cầu hỗ trợ"
+                        name="description"
+                        rules={[
+                            { required: true, message: 'Vui lòng mô tả nhu cầu hỗ trợ!' },
+                            { max: 500, message: 'Mô tả không được quá 500 ký tự!' }
+                        ]}
+                    >
+                        <TextArea
+                            rows={4}
+                            maxLength={500}
+                            showCount
+                            placeholder="Mô tả chi tiết nhu cầu hỗ trợ của bạn (ví dụ: gia đình 5 người cần thực phẩm và nước uống, đang ở khu vực ngập lụt...)"
+                        />
+                    </Form.Item>
+
+                    <Form.Item
+                        label="Upload ảnh (tùy chọn)"
+                        name="image"
+                        help="Kéo thả ảnh vào đây hoặc click để chọn"
+                    >
+                        <Upload
+                            accept="image/*"
+                            beforeUpload={() => false}
+                            onChange={handleSupportRequestImageChange}
+                            maxCount={1}
+                            listType="picture-card"
+                            drag
+                            showUploadList={true}
+                        >
+                            <div>
+                                <CameraOutlined />
+                                <div style={{ marginTop: 8 }}>Chụp/Chọn/Kéo thả ảnh</div>
+                            </div>
+                        </Upload>
+                    </Form.Item>
+
+                    <Form.Item>
+                        <Button
+                            type="primary"
+                            htmlType="submit"
+                            loading={supportRequestLoading}
+                            block
+                            size="large"
+                            style={{ height: '50px', fontSize: '16px', background: '#1890ff', borderColor: '#1890ff' }}
+                        >
+                            Gửi Yêu Cầu Hỗ Trợ
                         </Button>
                     </Form.Item>
                 </Form>
@@ -3128,6 +6070,228 @@ function MapPage() {
                 </Form>
             </Modal>
 
+            {/* Modal Thêm Điểm Tiếp Nhận Cứu Trợ */}
+            <Modal
+                title="Thêm Điểm Tiếp Nhận Cứu Trợ"
+                open={addReliefPointModalVisible}
+                onCancel={() => {
+                    setAddReliefPointModalVisible(false)
+                    addReliefPointForm.resetFields()
+                    setAddReliefPointLocation(null)
+                    setAddReliefPointGoogleMapsUrl('')
+                    setAddReliefPointParsedCoords(null)
+                }}
+                footer={null}
+                width={isMobile ? '90%' : 600}
+                style={{ top: isMobile ? 20 : 50 }}
+                zIndex={3000}
+                getContainer={() => document.body}
+                maskClosable={true}
+                destroyOnClose={false}
+            >
+                <Form
+                    form={addReliefPointForm}
+                    layout="vertical"
+                    onFinish={handleAddReliefPointSubmit}
+                    onFinishFailed={(errorInfo) => {
+                        message.error('Vui lòng điền đầy đủ thông tin bắt buộc!')
+                    }}
+                    autoComplete="off"
+                    validateTrigger="onSubmit"
+                >
+                    <Form.Item
+                        label="Tên điểm tiếp nhận cứu trợ (tùy chọn)"
+                        name="name"
+                        rules={[{ max: 100, message: 'Tên không được quá 100 ký tự!' }]}
+                    >
+                        <Input
+                            placeholder="Ví dụ: Điểm tiếp nhận cứu trợ xã ABC"
+                            maxLength={100}
+                            showCount
+                        />
+                    </Form.Item>
+
+                    <Form.Item
+                        label="Loại điểm"
+                        name="type"
+                        rules={[{ required: true, message: 'Vui lòng nhập hoặc chọn loại điểm!' }]}
+                    >
+                        <Select
+                            placeholder="Chọn hoặc nhập loại điểm"
+                            mode="tags"
+                            tokenSeparators={[',']}
+                            allowClear
+                        >
+                            <Select.Option value="Điểm tập kết">Điểm tập kết</Select.Option>
+                            <Select.Option value="Kho hàng">Kho hàng</Select.Option>
+                            <Select.Option value="Trung tâm phân phối">Trung tâm phân phối</Select.Option>
+                            <Select.Option value="Điểm tiếp nhận cứu trợ">Điểm tiếp nhận cứu trợ</Select.Option>
+                        </Select>
+                    </Form.Item>
+
+                    <Form.Item
+                        label="Loại cứu trợ tiếp nhận"
+                        name="reliefType"
+                        rules={[{ required: true, message: 'Vui lòng chọn ít nhất một loại cứu trợ!' }]}
+                    >
+                        <Checkbox.Group
+                            options={[
+                                { label: '🍞 Thực phẩm', value: 'Thực phẩm' },
+                                { label: '💧 Nước uống', value: 'Nước uống' },
+                                { label: '👕 Quần áo', value: 'Quần áo' },
+                                { label: '💊 Thuốc men', value: 'Thuốc men' },
+                                { label: '🛏️ Vật dụng sinh hoạt', value: 'Vật dụng sinh hoạt' },
+                                { label: '💰 Tài chính', value: 'Tài chính' },
+                                { label: '📦 Hỗn hợp', value: 'Hỗn hợp' },
+                                { label: '📝 Khác', value: 'Khác' }
+                            ]}
+                        />
+                    </Form.Item>
+
+                    <Form.Item
+                        label="Số điện thoại (tùy chọn)"
+                        name="phone"
+                        rules={[{ max: 20, message: 'Số điện thoại không được quá 20 ký tự!' }]}
+                    >
+                        <Input
+                            type="tel"
+                            placeholder="Ví dụ: 0912345678"
+                            maxLength={20}
+                            showCount
+                        />
+                    </Form.Item>
+
+                    <Form.Item
+                        label="Địa chỉ (tùy chọn)"
+                        name="address"
+                        rules={[{ max: 200, message: 'Địa chỉ không được quá 200 ký tự!' }]}
+                    >
+                        <Input
+                            placeholder="Ví dụ: Xã ABC, huyện XYZ, tỉnh Phú Yên"
+                            maxLength={200}
+                            showCount
+                        />
+                    </Form.Item>
+
+                    <Form.Item
+                        label="Link Google Maps (tùy chọn - để lấy tọa độ chính xác)"
+                        help="Paste link Google Maps để tự động lấy tọa độ. Hệ thống sẽ ưu tiên dùng tọa độ này."
+                    >
+                        <Input
+                            placeholder="https://www.google.com/maps?q=13.08,109.30 hoặc https://maps.google.com/@13.08,109.30"
+                            prefix={<GlobalOutlined />}
+                            allowClear
+                            value={addReliefPointGoogleMapsUrl}
+                            onChange={handleReliefPointGoogleMapsLinkChange}
+                        />
+                    </Form.Item>
+
+                    {addReliefPointParsedCoords && (
+                        <Alert
+                            message={`✅ Đã tìm thấy tọa độ: ${addReliefPointParsedCoords.lat.toFixed(6)}, ${addReliefPointParsedCoords.lng.toFixed(6)}`}
+                            type="success"
+                            showIcon
+                            style={{ marginBottom: 16 }}
+                            closable
+                            onClose={() => {
+                                setAddReliefPointParsedCoords(null)
+                                setAddReliefPointGoogleMapsUrl('')
+                                setAddReliefPointLocation(null)
+                            }}
+                        />
+                    )}
+
+                    <Form.Item
+                        label="Vị trí trên bản đồ"
+                        help="Chọn vị trí trên bản đồ hoặc dùng GPS tự động (nếu chưa có link Google Maps)"
+                    >
+                        <Space direction="vertical" style={{ width: '100%' }} size="middle">
+                            <Space wrap>
+                                <Button
+                                    icon={<EnvironmentOutlined />}
+                                    onClick={handleGetCurrentLocationForReliefPoint}
+                                    loading={addReliefPointLoading}
+                                >
+                                    Lấy GPS Tự Động
+                                </Button>
+                                <Button
+                                    icon={<AimOutlined />}
+                                    onClick={() => {
+                                        setLocationPickerContext('addReliefPoint')
+                                        setLocationPickerModalVisible(true)
+                                        if (addReliefPointLocation) {
+                                            setLocationPickerViewState({
+                                                longitude: addReliefPointLocation.lng,
+                                                latitude: addReliefPointLocation.lat,
+                                                zoom: 15
+                                            })
+                                            setLocationPickerSelected(addReliefPointLocation)
+                                        } else if (viewState.latitude && viewState.longitude) {
+                                            setLocationPickerViewState({
+                                                longitude: viewState.longitude,
+                                                latitude: viewState.latitude,
+                                                zoom: 15
+                                            })
+                                            setLocationPickerSelected(null)
+                                        }
+                                    }}
+                                    type={addReliefPointLocation ? 'primary' : 'default'}
+                                >
+                                    {addReliefPointLocation ? 'Đã chọn vị trí' : 'Chọn Trên Bản Đồ'}
+                                </Button>
+                            </Space>
+                            {addReliefPointLocation && !addReliefPointParsedCoords && (
+                                <Tag color="green" style={{ fontSize: '12px' }}>
+                                    ✓ Đã chọn: {addReliefPointLocation.lat.toFixed(6)}, {addReliefPointLocation.lng.toFixed(6)}
+                                </Tag>
+                            )}
+                        </Space>
+                    </Form.Item>
+
+                    <Form.Item
+                        label="Thông tin điểm tiếp nhận cứu trợ"
+                        name="description"
+                        rules={[
+                            { required: true, message: 'Vui lòng nhập thông tin về điểm tiếp nhận cứu trợ!' },
+                            { max: 1000, message: 'Nội dung không được quá 1000 ký tự!' }
+                        ]}
+                        help="Nhập thông tin về điểm tiếp nhận cứu trợ"
+                    >
+                        <TextArea
+                            placeholder="Ví dụ: Điểm tiếp nhận cứu trợ tại trường học. Tiếp nhận: thực phẩm, nước uống, quần áo. Liên hệ: 0912345678."
+                            rows={6}
+                            maxLength={1000}
+                            showCount
+                        />
+                    </Form.Item>
+
+                    <Form.Item>
+                        <Space>
+                            <Button
+                                type="primary"
+                                htmlType="submit"
+                                loading={addReliefPointLoading}
+                                icon={<PlusOutlined />}
+                                style={{ background: '#52c41a', borderColor: '#52c41a' }}
+                            >
+                                Thêm Điểm Cứu Trợ
+                            </Button>
+                            <Button
+                                onClick={() => {
+                                    setAddReliefPointModalVisible(false)
+                                    addReliefPointForm.resetFields()
+                                    setAddReliefPointLocation(null)
+                                    setAddReliefPointGoogleMapsUrl('')
+                                    setAddReliefPointParsedCoords(null)
+                                }}
+                            >
+                                Hủy
+                            </Button>
+                        </Space>
+                    </Form.Item>
+                </Form>
+            </Modal>
+
             {/* Water Level Chart Modal */}
             <WaterLevelChart
                 visible={waterLevelModalVisible}
@@ -3139,9 +6303,138 @@ function MapPage() {
                 stationName={selectedWaterStation?.stationName}
                 coordinates={selectedWaterStation?.coordinates}
             />
+
+            {/* Modal danh sách requests trong cluster */}
+            <Modal
+                title={
+                    <Space>
+                        <FireOutlined style={{ color: '#dc2626' }} />
+                        <span>Danh sách cầu cứu trong cụm ({clusterRequests.length})</span>
+                    </Space>
+                }
+                open={clusterModalVisible}
+                onCancel={() => {
+                    setClusterModalVisible(false)
+                    setClusterRequests([])
+                }}
+                footer={null}
+                width={600}
+                zIndex={3000}
+                getContainer={() => document.body}
+            >
+                <List
+                    dataSource={clusterRequests}
+                    locale={{ emptyText: 'Không có dữ liệu' }}
+                    renderItem={(request, index) => {
+                        const hasCoords = request.coords && Array.isArray(request.coords) && request.coords.length >= 2
+                        return (
+                            <List.Item
+                                style={{
+                                    cursor: 'pointer',
+                                    padding: '12px',
+                                    marginBottom: '8px',
+                                    borderRadius: '8px',
+                                    border: '1px solid #f0f0f0',
+                                    transition: 'all 0.2s',
+                                    background: selectedListItem === (request._id || request.id) ? '#f0f8ff' : '#fff'
+                                }}
+                                onClick={() => {
+                                    // Xem chi tiết request
+                                    setSelectedRescue(request)
+                                    setSelectedListItem(request._id || request.id)
+                                    setClusterModalVisible(false)
+
+                                    // Điều hướng map đến vị trí
+                                    if (hasCoords) {
+                                        setViewState(prev => ({
+                                            ...prev,
+                                            longitude: request.coords[0],
+                                            latitude: request.coords[1],
+                                            zoom: 14
+                                        }))
+                                    }
+                                }}
+                                onMouseEnter={(e) => {
+                                    e.currentTarget.style.background = '#f0f8ff'
+                                    e.currentTarget.style.borderColor = '#1890ff'
+                                }}
+                                onMouseLeave={(e) => {
+                                    e.currentTarget.style.background = selectedListItem === (request._id || request.id) ? '#f0f8ff' : '#fff'
+                                    e.currentTarget.style.borderColor = '#f0f0f0'
+                                }}
+                            >
+                                <Space direction="vertical" style={{ width: '100%' }} size="small">
+                                    <Space>
+                                        <Text strong style={{ fontSize: '14px' }}>
+                                            #{index + 1} - {request.location || request.description?.substring(0, 50) || 'Không có địa chỉ'}
+                                        </Text>
+                                    </Space>
+
+                                    {request.description && (
+                                        <Text type="secondary" style={{ fontSize: '12px', display: 'block' }}>
+                                            {request.description.length > 150
+                                                ? `${request.description.substring(0, 150)}...`
+                                                : request.description}
+                                        </Text>
+                                    )}
+
+                                    <Space wrap>
+                                        {request.people && (
+                                            <Tag color="orange">👥 {request.people}</Tag>
+                                        )}
+                                        {request.urgency && (
+                                            <Tag color={request.urgency.includes('CỰC') ? 'red' : 'orange'}>
+                                                {request.urgency}
+                                            </Tag>
+                                        )}
+                                        {request.status && (
+                                            <Tag color={request.status === 'Đã xử lý' ? 'green' : 'default'}>
+                                                {request.status}
+                                            </Tag>
+                                        )}
+                                    </Space>
+
+                                    <Space split={<span>|</span>}>
+                                        {request.contact && (
+                                            <Button
+                                                size="small"
+                                                type="link"
+                                                icon={<PhoneOutlined />}
+                                                href={`tel:${request.contact.split(',')[0].replace(/\./g, '').trim()}`}
+                                                onClick={(e) => e.stopPropagation()}
+                                                style={{ padding: 0, fontSize: '12px' }}
+                                            >
+                                                {request.contact.split(',')[0].trim()}
+                                            </Button>
+                                        )}
+                                        {hasCoords && (
+                                            <Button
+                                                size="small"
+                                                type="link"
+                                                icon={<GlobalOutlined />}
+                                                href={`https://www.google.com/maps?q=${request.coords[1]},${request.coords[0]}`}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                onClick={(e) => e.stopPropagation()}
+                                                style={{ padding: 0, fontSize: '12px' }}
+                                            >
+                                                📍 Xem trên Google Maps
+                                            </Button>
+                                        )}
+                                        {request.timestamp && (
+                                            <Text type="secondary" style={{ fontSize: '11px' }}>
+                                                <ClockCircleOutlined /> {formatTime(request.timestamp)}
+                                            </Text>
+                                        )}
+                                    </Space>
+                                </Space>
+                            </List.Item>
+                        )
+                    }}
+                />
+            </Modal>
         </Layout>
     )
 }
 
 export default MapPage
-
